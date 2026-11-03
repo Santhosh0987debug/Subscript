@@ -1,0 +1,37 @@
+{
+  "name": "subscript",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Subscript - a multi-tenant subscription and revenue management platform.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "npm run build -w @subscript/shared && concurrently --names web,api --prefix-colors cyan,green \"npm run dev -w @subscript/web\" \"npm run dev -w @subscript/server\"",
+    "build": "npm run build -w @subscript/shared && npm run build -w @subscript/web && npm run build -w @subscript/server",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "npm run db:generate && npm run build -w @subscript/shared && npm run typecheck -w @subscript/web && npm run typecheck -w @subscript/server && npm run typecheck -w @subscript/shared",
+    "test": "npm run build -w @subscript/shared && npm run test -w @subscript/server && npm run test -w @subscript/web",
+    "db:generate": "npm run db:generate -w @subscript/server",
+    "db:validate": "npm run db:validate -w @subscript/server",
+    "db:migrate": "npm run db:migrate -w @subscript/server",
+    "db:deploy": "npm run db:deploy -w @subscript/server",
+    "db:studio": "npm run db:studio -w @subscript/server",
+    "postinstall": "npm run db:generate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}
