@@ -1,7 +1,9 @@
 import { Link, useLocation } from "react-router-dom";
 import { ChevronRight, Menu } from "lucide-react";
+import { useAuth } from "@/auth/AuthProvider";
 import { BrandLockup } from "@/components/layout/Brand";
 import { Badge } from "@/components/ui/Badge";
+import { getInitials } from "@/lib/identity";
 import { getPageTitle } from "@/lib/navigation";
 
 interface TopbarProps {
@@ -11,7 +13,11 @@ interface TopbarProps {
 
 export function Topbar({ onOpenMenu, sidebarOpen }: TopbarProps) {
   const location = useLocation();
+  const { user, activeOrganization } = useAuth();
   const pageTitle = getPageTitle(location.pathname);
+  const workspaceName = activeOrganization?.name ?? "Workspace";
+  const displayName = user?.name ?? "Subscript member";
+  const initials = getInitials(displayName);
 
   return (
     <header className="sticky top-0 z-30 border-b border-line/75 bg-canvas/85 backdrop-blur-xl">
@@ -34,7 +40,7 @@ export function Topbar({ onOpenMenu, sidebarOpen }: TopbarProps) {
           </div>
 
           <div className="hidden min-w-0 items-center gap-2 text-[12px] sm:flex">
-            <span className="text-muted">Northwind Labs</span>
+            <span className="truncate text-muted">{workspaceName}</span>
             <ChevronRight
               aria-hidden="true"
               className="h-3.5 w-3.5 shrink-0 text-line-strong"
@@ -54,16 +60,17 @@ export function Topbar({ onOpenMenu, sidebarOpen }: TopbarProps) {
             className="hidden border-line bg-surface/75 text-muted backdrop-blur-sm md:inline-flex"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-lime-deep" />
-            Preview data
+            Secure session
           </Badge>
           <span aria-hidden="true" className="hidden h-5 w-px bg-line sm:block" />
           <Link
             to="/settings"
-            aria-label="AM - Open workspace settings"
+            aria-label={`${displayName} - Open workspace settings`}
+            title={user?.email}
             className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
           >
             <span className="grid h-8 w-8 place-items-center rounded-full bg-[#e9d9bf] text-[10px] font-semibold tracking-[0.03em] text-[#594831] ring-1 ring-ink/5 transition-transform hover:scale-105">
-              AM
+              {initials}
             </span>
           </Link>
         </div>

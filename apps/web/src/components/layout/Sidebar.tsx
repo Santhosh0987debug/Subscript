@@ -1,9 +1,16 @@
-import { useEffect, useRef } from "react";
-import { Link, NavLink } from "react-router-dom";
-import { Settings2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, useNavigate } from "react-router-dom";
+import { LoaderCircle, LogOut, Settings2, X } from "lucide-react";
+import { useAuth } from "@/auth/AuthProvider";
 import { BrandLockup } from "@/components/layout/Brand";
 import { ApiStatus } from "@/components/layout/ApiStatus";
+import { OrganizationSwitcher } from "@/components/layout/OrganizationSwitcher";
 import { cn } from "@/lib/cn";
+import { getErrorMessage } from "@/lib/errors";
+import {
+  getInitials,
+  getOrganizationRoleLabel,
+} from "@/lib/identity";
 import {
   primaryNavigation,
   secondaryNavigation,
@@ -57,12 +64,39 @@ function NavigationLink({ item, onNavigate }: { item: NavigationItem; onNavigate
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const { user, activeOrganization, logout } = useAuth();
+  const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       closeButtonRef.current?.focus();
     }
   }, [open]);
+
+  async function handleLogout(): Promise<void> {
+    if (loggingOut) {
+      return;
+    }
+
+    setLoggingOut(true);
+    setLogoutError(null);
+
+    try {
+      await logout();
+      navigate("/login", { replace: true });
+    } catch (error) {
+      setLogoutError(getErrorMessage(error, "Could not sign out. Please try again."));
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
+  const displayName = user?.name ?? "Subscript member";
+  const roleLabel = activeOrganization
+    ? getOrganizationRoleLabel(activeOrganization.role)
+    : "Workspace member";
 
   return (
     <aside
@@ -99,25 +133,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         <div className="px-3">
-          <div className="rounded-2xl border border-sidebar-line bg-sidebar-raised/80 p-3">
-            <div className="flex items-center gap-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-lime/20 bg-lime/10 font-mono text-[10px] font-medium tracking-[0.06em] text-lime">
-                NW
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-[12.5px] font-semibold tracking-[-0.01em] text-sidebar-text">
-                  Northwind Labs
-                </p>
-                <p className="mt-0.5 truncate font-mono text-[8.5px] uppercase tracking-[0.14em] text-sidebar-muted">
-                  Demo workspace
-                </p>
-              </div>
-              <span
-                aria-hidden="true"
-                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-lime"
-              />
-            </div>
-          </div>
+          <OrganizationSwitcher />
         </div>
 
         <nav className="sidebar-scroll relative mt-7 min-h-0 flex-1 overflow-y-auto px-3 pb-5">
@@ -149,28 +165,58 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         <div className="relative border-t border-sidebar-line p-3">
-          <Link
-            to="/settings"
-            onClick={onClose}
-            className="group flex items-center gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.055]"
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e9d9bf] text-[10px] font-semibold tracking-[0.03em] text-[#594831]">
-              AM
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-[12px] font-semibold text-sidebar-text">
-                Alex Morgan
+          <div className="flex items-center gap-1">
+            <Link
+              to="/settings"
+              onClick={onClose}
+              title={user?.email}
+              className="group flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.055]"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e9d9bf] text-[10px] font-semibold tracking-[0.03em] text-[#594831]">
+                {getInitials(displayName)}
               </span>
-              <span className="mt-0.5 block truncate font-mono text-[8.5px] uppercase tracking-[0.13em] text-sidebar-muted">
-                Workspace owner
+              <span className="min-w-0">
+                <span className="block truncate text-[12px] font-semibold text-sidebar-text">
+                  {displayName}
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-[8.5px] uppercase tracking-[0.13em] text-sidebar-muted">
+                  {roleLabel}
+                </span>
               </span>
-            </span>
-            <Settings2
-              aria-hidden="true"
-              className="ml-auto h-3.5 w-3.5 text-sidebar-muted/60 transition-colors group-hover:text-sidebar-text"
-              strokeWidth={1.7}
-            />
-          </Link>
+              <Settings2
+                aria-hidden="true"
+                className="ml-auto h-3.5 w-3.5 shrink-0 text-sidebar-muted/60 transition-colors group-hover:text-sidebar-text"
+                strokeWidth={1.7}
+              />
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => {
+                void handleLogout();
+              }}
+              disabled={loggingOut}
+              aria-label="Sign out"
+              title="Sign out"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sidebar-muted transition-colors hover:bg-white/[0.055] hover:text-sidebar-text disabled:opacity-60 focus-visible:outline-lime"
+            >
+              {loggingOut ? (
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="h-4 w-4 animate-spin"
+                  strokeWidth={1.9}
+                />
+              ) : (
+                <LogOut aria-hidden="true" className="h-4 w-4" strokeWidth={1.8} />
+              )}
+            </button>
+          </div>
+
+          {logoutError ? (
+            <p role="alert" className="mt-2 px-1 text-[10.5px] leading-4 text-[#f0a58f]">
+              {logoutError}
+            </p>
+          ) : null}
         </div>
       </div>
     </aside>

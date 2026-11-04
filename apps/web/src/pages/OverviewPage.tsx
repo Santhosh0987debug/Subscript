@@ -1,5 +1,6 @@
 import { Download, Sparkles, ArrowUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useAuth } from "@/auth/AuthProvider";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton";
 import { MetricCard } from "@/components/dashboard/MetricCard";
@@ -17,6 +18,7 @@ import {
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useOverviewPreview } from "@/hooks/useOverviewPreview";
 import { downloadTextFile, toRevenueCsv } from "@/lib/csv";
+import { getFirstName } from "@/lib/identity";
 
 function exportRevenueReport(): void {
   const csv = toRevenueCsv(overviewData.revenue);
@@ -64,8 +66,8 @@ function OverviewContent({ data }: { data: OverviewData }) {
       <div className="flex items-center gap-2 px-1 pt-2 text-[10px] leading-5 text-muted/75">
         <Sparkles aria-hidden="true" className="h-3 w-3 shrink-0" strokeWidth={1.7} />
         <p>
-          This workspace is a Phase 1 preview. All figures are illustrative and no
-          customer data is connected.
+          Revenue figures are illustrative preview data. Your session and workspace
+          membership are live and organization-scoped.
         </p>
       </div>
     </div>
@@ -75,6 +77,9 @@ function OverviewContent({ data }: { data: OverviewData }) {
 export default function OverviewPage() {
   useDocumentTitle("Overview");
   const overview = useOverviewPreview();
+  const { user, activeOrganization } = useAuth();
+  const organizationName = activeOrganization?.name ?? "your workspace";
+  const firstName = user ? getFirstName(user.name) : "there";
 
   return (
     <>
@@ -94,7 +99,7 @@ export default function OverviewPage() {
             .
           </>
         }
-        description="A clear read on how Northwind Labs is growing - the subscriptions behind the number, the customers driving it, and the revenue that compounds over time."
+        description={`Welcome back, ${firstName}. A clear read on how ${organizationName} is growing - the subscriptions behind the number, the customers driving it, and the revenue that compounds over time.`}
         actions={
           <>
             <Button variant="secondary" onClick={exportRevenueReport}>

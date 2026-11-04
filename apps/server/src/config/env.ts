@@ -12,6 +12,10 @@ export interface ServerEnv {
   port: number;
   databaseUrl: string | null;
   corsOrigins: string[];
+  sessionTtlMs: number;
+  bcryptCost: number;
+  cookieSecure: boolean;
+  trustProxy: boolean;
 }
 
 type EnvSource = Record<string, string | undefined>;
@@ -21,6 +25,10 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   DATABASE_URL: z.string().trim().optional(),
   CORS_ORIGINS: z.string().trim().optional(),
+  SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+  BCRYPT_COST: z.coerce.number().int().min(10).max(14).default(12),
+  COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  TRUST_PROXY: z.enum(["true", "false"]).default("false"),
 });
 
 export class EnvValidationError extends Error {
@@ -87,9 +95,19 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     throw new EnvValidationError(issues);
   }
 
-  const { NODE_ENV: nodeEnv, PORT: port, DATABASE_URL, CORS_ORIGINS } = parsed.data;
+  const {
+    NODE_ENV: nodeEnv,
+    PORT: port,
+    DATABASE_URL,
+    CORS_ORIGINS,
+    SESSION_TTL_DAYS: sessionTtlDays,
+    BCRYPT_COST: bcryptCost,
+    COOKIE_SECURE,
+    TRUST_PROXY,
+  } = parsed.data;
   const issues: string[] = [];
   const databaseUrl = DATABASE_URL && DATABASE_URL.length > 0 ? DATABASE_URL : null;
+  const cookieSecure = COOKIE_SECURE ? COOKIE_SECURE === "true" : nodeEnv === "production";
 
   if (databaseUrl && !isPostgresUrl(databaseUrl)) {
     issues.push("DATABASE_URL: must use the postgresql:// or postgres:// protocol");
@@ -139,5 +157,9 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     port,
     databaseUrl,
     corsOrigins: normalizedOrigins,
+    sessionTtlMs: sessionTtlDays * 24 * 60 * 60 * 1000,
+    bcryptCost,
+    cookieSecure,
+    trustProxy: TRUST_PROXY === "true",
   };
 }

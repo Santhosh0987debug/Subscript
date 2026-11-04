@@ -15,6 +15,29 @@ describe("parseEnv", () => {
       "http://localhost:5173",
       "http://localhost:4173",
     ]);
+    expect(env.sessionTtlMs).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(env.bcryptCost).toBe(12);
+    expect(env.cookieSecure).toBe(false);
+    expect(env.trustProxy).toBe(false);
+  });
+
+  it("accepts auth and cookie overrides", () => {
+    const env = parseEnv({
+      SESSION_TTL_DAYS: "14",
+      BCRYPT_COST: "11",
+      COOKIE_SECURE: "true",
+      TRUST_PROXY: "true",
+    });
+
+    expect(env.sessionTtlMs).toBe(14 * 24 * 60 * 60 * 1000);
+    expect(env.bcryptCost).toBe(11);
+    expect(env.cookieSecure).toBe(true);
+    expect(env.trustProxy).toBe(true);
+  });
+
+  it("rejects out-of-range auth settings", () => {
+    expect(() => parseEnv({ SESSION_TTL_DAYS: "0" })).toThrow(EnvValidationError);
+    expect(() => parseEnv({ BCRYPT_COST: "4" })).toThrow(EnvValidationError);
   });
 
   it("coerces and validates the port", () => {
@@ -77,6 +100,7 @@ describe("parseEnv", () => {
     expect(env.nodeEnv).toBe("production");
     expect(env.databaseUrl).toBe(productionDatabaseUrl);
     expect(env.corsOrigins).toEqual(["https://app.subscript.dev"]);
+    expect(env.cookieSecure).toBe(true);
   });
 });
 

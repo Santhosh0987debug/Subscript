@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
+import { createAuthService } from "./auth/service.js";
+import { createMemoryAuthStore } from "./auth/store/memory.js";
+import { createPrismaAuthStore } from "./auth/store/prisma.js";
 import { EnvValidationError, parseEnv } from "./config/env.js";
 import { createPrismaClient } from "./db/prisma.js";
 import { logger } from "./lib/logger.js";
@@ -25,11 +28,33 @@ function startServer(): void {
 
   const prisma = env.databaseUrl ? createPrismaClient(env.databaseUrl) : null;
 
-  if (!prisma) {
-    logger.warn("DATABASE_URL is not set; database-backed features are disabled.");
+  if (!prisma && env.nodeEnv === "production") {
+    logger.error("DATABASE_URL is required in production.");
+    process.exitCode = 1;
+    return;
   }
 
-  const app = createApp({ corsOrigins: env.corsOrigins });
+  const authStore = prisma ? createPrismaAuthStore(prisma) : createMemoryAuthStore();
+
+  if (!prisma) {
+    logger.warn(
+      "DATABASE_URL is not set; using an in-memory auth store for local development. Data resets on restart.",
+    );
+  }
+
+  const authService = createAuthService({
+    store: authStore,
+    passwordCost: env.bcryptCost,
+    sessionTtlMs: env.sessionTtlMs,
+  });
+
+  const app = createApp({
+    authService,
+    corsOrigins: env.corsOrigins,
+    cookieSecure: env.cookieSecure,
+    sessionTtlMs: env.sessionTtlMs,
+    trustProxy: env.trustProxy,
+  });
   const server = createServer(app);
   let shuttingDown = false;
 
@@ -87,7 +112,7 @@ function startServer(): void {
     logger.info("Subscript API listening", {
       port: env.port,
       environment: env.nodeEnv,
-      databaseConfigured: prisma !== null,
+      authStore: prisma ? "postgresql" : "memory",
       corsOrigins: env.corsOrigins,
     });
   });

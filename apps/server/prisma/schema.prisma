@@ -10,11 +10,10 @@ datasource db {
   provider = "postgresql"
 }
 
-enum TenantRole {
+enum OrganizationRole {
   OWNER
   ADMIN
   MEMBER
-  VIEWER
 }
 
 enum CustomerStatus {
@@ -43,7 +42,22 @@ enum InvoiceStatus {
   UNCOLLECTIBLE
 }
 
-model Tenant {
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique @db.VarChar(320)
+  name         String    @db.VarChar(160)
+  passwordHash String    @db.VarChar(100)
+  lastLoginAt  DateTime? @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+
+  memberships OrganizationMember[]
+  sessions    Session[]
+
+  @@map("users")
+}
+
+model Organization {
   id              String   @id @default(uuid()) @db.Uuid
   name            String   @db.VarChar(160)
   slug            String   @unique @db.VarChar(80)
@@ -51,85 +65,92 @@ model Tenant {
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
-  memberships   Membership[]
+  members       OrganizationMember[]
+  activeSessions Session[]            @relation("ActiveOrganizationSessions")
   customers     Customer[]
   plans         Plan[]
   subscriptions Subscription[]
   invoices      Invoice[]
 
-  @@map("tenants")
+  @@map("organizations")
 }
 
-model User {
-  id        String   @id @default(uuid()) @db.Uuid
-  email     String   @unique @db.VarChar(320)
-  name      String   @db.VarChar(160)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+model OrganizationMember {
+  organizationId String           @db.Uuid
+  userId         String           @db.Uuid
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
 
-  memberships Membership[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("users")
-}
-
-model Membership {
-  tenantId  String     @db.Uuid
-  userId    String     @db.Uuid
-  role      TenantRole @default(MEMBER)
-  createdAt DateTime   @default(now()) @db.Timestamptz(3)
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([tenantId, userId])
+  @@id([organizationId, userId])
   @@index([userId])
-  @@map("memberships")
+  @@map("organization_members")
+}
+
+model Session {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tokenHash            String   @unique @db.VarChar(64)
+  userId               String   @db.Uuid
+  activeOrganizationId String?  @db.Uuid
+  expiresAt            DateTime @db.Timestamptz(3)
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+  lastUsedAt           DateTime @default(now()) @db.Timestamptz(3)
+
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrganization Organization? @relation("ActiveOrganizationSessions", fields: [activeOrganizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
 }
 
 model Customer {
-  id         String         @id @default(uuid()) @db.Uuid
-  tenantId   String         @db.Uuid
-  name       String         @db.VarChar(160)
-  email      String         @db.VarChar(320)
-  externalId String?        @db.VarChar(160)
-  status     CustomerStatus @default(ACTIVE)
-  metadata   Json?
-  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime       @updatedAt @db.Timestamptz(3)
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  name           String         @db.VarChar(160)
+  email          String         @db.VarChar(320)
+  externalId     String?        @db.VarChar(160)
+  status         CustomerStatus @default(ACTIVE)
+  metadata       Json?
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   subscriptions Subscription[]
   invoices      Invoice[]
 
-  @@unique([tenantId, email])
-  @@index([tenantId, status])
+  @@unique([organizationId, email])
+  @@index([organizationId, status])
   @@map("customers")
 }
 
 model Plan {
-  id          String          @id @default(uuid()) @db.Uuid
-  tenantId    String          @db.Uuid
-  name        String          @db.VarChar(120)
-  code        String          @db.VarChar(60)
-  description String?         @db.Text
-  amount      Decimal         @db.Decimal(12, 2)
-  currency    String          @default("USD") @db.VarChar(3)
-  interval    BillingInterval @default(MONTH)
-  active      Boolean         @default(true)
-  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime        @updatedAt @db.Timestamptz(3)
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  name           String          @db.VarChar(120)
+  code           String          @db.VarChar(60)
+  description    String?         @db.Text
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       String          @default("USD") @db.VarChar(3)
+  interval       BillingInterval @default(MONTH)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   subscriptions Subscription[]
 
-  @@unique([tenantId, code])
-  @@index([tenantId, active])
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
   @@map("plans")
 }
 
 model Subscription {
   id                 String             @id @default(uuid()) @db.Uuid
-  tenantId           String             @db.Uuid
+  organizationId     String             @db.Uuid
   customerId         String             @db.Uuid
   planId             String             @db.Uuid
   status             SubscriptionStatus @default(TRIALING)
@@ -141,12 +162,12 @@ model Subscription {
   createdAt          DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  plan     Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
-  invoices Invoice[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  plan         Plan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+  invoices     Invoice[]
 
-  @@index([tenantId, status])
+  @@index([organizationId, status])
   @@index([customerId])
   @@index([planId])
   @@map("subscriptions")
@@ -154,7 +175,7 @@ model Subscription {
 
 model Invoice {
   id             String        @id @default(uuid()) @db.Uuid
-  tenantId       String        @db.Uuid
+  organizationId String        @db.Uuid
   customerId     String        @db.Uuid
   subscriptionId String?       @db.Uuid
   number         String        @db.VarChar(60)
@@ -169,12 +190,12 @@ model Invoice {
   createdAt      DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer     Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
   subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
-  @@unique([tenantId, number])
-  @@index([tenantId, status])
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
   @@index([customerId])
   @@map("invoices")
 }

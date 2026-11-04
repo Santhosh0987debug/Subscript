@@ -1,6 +1,6 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
-import type { ApiErrorCode, ApiErrorResponse } from "@subscript/shared";
+import type { ApiErrorCode, ApiErrorResponse, ApiFieldIssue } from "@subscript/shared";
 import { AppError, type HttpStatusCode } from "../errors/app-error.js";
 import { logger } from "../lib/logger.js";
 
@@ -41,11 +41,13 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
   let status: HttpStatusCode = 500;
   let code: ApiErrorCode = "INTERNAL_ERROR";
   let message = "An unexpected error occurred.";
+  let details: ApiFieldIssue[] | undefined;
 
   if (error instanceof AppError) {
     status = error.statusCode;
     code = error.code;
     message = error.message;
+    details = error.details;
   } else if (isBodyParserError(error)) {
     status = 400;
     code = "BAD_REQUEST";
@@ -77,6 +79,7 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
       code,
       message,
       requestId: requestIdValue,
+      ...(details ? { details } : {}),
     },
   };
 

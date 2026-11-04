@@ -31,24 +31,14 @@ export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 export const CUSTOMER_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
 export type CustomerStatus = (typeof CUSTOMER_STATUSES)[number];
 
-export const TENANT_ROLES = ["OWNER", "ADMIN", "MEMBER", "VIEWER"] as const;
-export type TenantRole = (typeof TENANT_ROLES)[number];
-
 export interface Money {
   amountMinor: number;
   currency: CurrencyCode;
 }
 
-export interface TenantSummary {
-  id: string;
-  name: string;
-  slug: string;
-  defaultCurrency: CurrencyCode;
-}
-
 export interface CustomerSummary {
   id: string;
-  tenantId: string;
+  organizationId: string;
   name: string;
   email: string;
   status: CustomerStatus;
@@ -57,7 +47,7 @@ export interface CustomerSummary {
 
 export interface PlanSummary {
   id: string;
-  tenantId: string;
+  organizationId: string;
   name: string;
   code: string;
   price: Money;
@@ -67,7 +57,7 @@ export interface PlanSummary {
 
 export interface SubscriptionSummary {
   id: string;
-  tenantId: string;
+  organizationId: string;
   customerId: string;
   planId: string;
   status: SubscriptionStatus;
@@ -78,7 +68,7 @@ export interface SubscriptionSummary {
 
 export interface InvoiceSummary {
   id: string;
-  tenantId: string;
+  organizationId: string;
   customerId: string;
   number: string;
   status: InvoiceStatus;

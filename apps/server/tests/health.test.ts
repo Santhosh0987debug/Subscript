@@ -2,10 +2,10 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { API_PATHS } from "@subscript/shared";
 import type { ApiErrorResponse, HealthResponse } from "@subscript/shared";
-import { createApp } from "../src/app.js";
+import { createTestApp, TEST_ORIGIN } from "./helpers/test-app.js";
 
-const allowedOrigin = "http://localhost:5173";
-const app = createApp({ corsOrigins: [allowedOrigin] });
+const allowedOrigin = TEST_ORIGIN;
+const { app } = createTestApp();
 
 describe("GET /api/health", () => {
   it("returns a live health payload with a request id", async () => {
