@@ -5,8 +5,12 @@ import { createAuthService } from "./auth/service.js";
 import { createMemoryAuthStore } from "./auth/store/memory.js";
 import { createPrismaAuthStore } from "./auth/store/prisma.js";
 import { EnvValidationError, parseEnv } from "./config/env.js";
+import { createMemoryCustomerStore } from "./customers/store/memory.js";
+import { createPrismaCustomerStore } from "./customers/store/prisma.js";
 import { createPrismaClient } from "./db/prisma.js";
 import { logger } from "./lib/logger.js";
+import { createMemoryPlanStore } from "./plans/store/memory.js";
+import { createPrismaPlanStore } from "./plans/store/prisma.js";
 
 function startServer(): void {
   let env;
@@ -35,10 +39,16 @@ function startServer(): void {
   }
 
   const authStore = prisma ? createPrismaAuthStore(prisma) : createMemoryAuthStore();
+  const customerStore = prisma
+    ? createPrismaCustomerStore(prisma)
+    : createMemoryCustomerStore();
+  const planStore = prisma
+    ? createPrismaPlanStore(prisma)
+    : createMemoryPlanStore();
 
   if (!prisma) {
     logger.warn(
-      "DATABASE_URL is not set; using an in-memory auth store for local development. Data resets on restart.",
+      "DATABASE_URL is not set; using in-memory stores for local development. Data resets on restart.",
     );
   }
 
@@ -50,6 +60,8 @@ function startServer(): void {
 
   const app = createApp({
     authService,
+    customerStore,
+    planStore,
     corsOrigins: env.corsOrigins,
     cookieSecure: env.cookieSecure,
     sessionTtlMs: env.sessionTtlMs,

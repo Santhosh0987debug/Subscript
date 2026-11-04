@@ -5,6 +5,8 @@ import helmet from "helmet";
 import { API_PATHS } from "@subscript/shared";
 import type { AuthService } from "./auth/service.js";
 import { SESSION_COOKIE_NAME } from "./auth/session-token.js";
+import type { CustomerStore } from "./customers/types.js";
+import { createCustomersRouter } from "./customers/router.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createAuthenticate } from "./middleware/authenticate.js";
 import { notFoundHandler } from "./middleware/not-found.js";
@@ -17,6 +19,8 @@ import {
 } from "./middleware/rate-limit.js";
 import { requireRole } from "./middleware/require-role.js";
 import { requestId } from "./middleware/request-id.js";
+import { createPlansRouter } from "./plans/router.js";
+import type { PlanStore } from "./plans/types.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createOrganizationsRouter } from "./routes/organizations.js";
 import { healthHandler } from "./routes/health.js";
@@ -30,6 +34,8 @@ const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface AppOptions {
   authService: AuthService;
+  customerStore: CustomerStore;
+  planStore: PlanStore;
   corsOrigins?: readonly string[];
   cookieName?: string;
   cookieSecure?: boolean;
@@ -101,6 +107,24 @@ export function createApp(options: AppOptions): Express {
       requireOrganization,
       requireAdmin: requireRole("OWNER", "ADMIN"),
       cookieName,
+    }),
+  );
+
+  app.use(
+    createCustomersRouter({
+      customerStore: options.customerStore,
+      authenticate,
+      requireOrganization,
+      requireAdmin: requireRole("OWNER", "ADMIN"),
+    }),
+  );
+
+  app.use(
+    createPlansRouter({
+      planStore: options.planStore,
+      authenticate,
+      requireOrganization,
+      requireAdmin: requireRole("OWNER", "ADMIN"),
     }),
   );
 

@@ -10,6 +10,19 @@ export const API_PATHS = {
   currentOrganization: "/api/organizations/current",
   switchOrganization: (organizationId: string) =>
     `/api/organizations/${encodeURIComponent(organizationId)}/switch`,
+  customers: "/api/customers",
+  customer: (customerId: string) =>
+    `/api/customers/${encodeURIComponent(customerId)}`,
+  customerArchive: (customerId: string) =>
+    `/api/customers/${encodeURIComponent(customerId)}/archive`,
+  customerRestore: (customerId: string) =>
+    `/api/customers/${encodeURIComponent(customerId)}/restore`,
+  plans: "/api/plans",
+  plan: (planId: string) => `/api/plans/${encodeURIComponent(planId)}`,
+  planArchive: (planId: string) =>
+    `/api/plans/${encodeURIComponent(planId)}/archive`,
+  planRestore: (planId: string) =>
+    `/api/plans/${encodeURIComponent(planId)}/restore`,
 } as const;
 
 /**

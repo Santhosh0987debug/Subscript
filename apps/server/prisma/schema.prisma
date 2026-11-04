@@ -21,6 +21,18 @@ enum CustomerStatus {
   ARCHIVED
 }
 
+enum CustomerActivityType {
+  CREATED
+  UPDATED
+  ARCHIVED
+  RESTORED
+}
+
+enum PlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 enum BillingInterval {
   MONTH
   YEAR
@@ -65,12 +77,13 @@ model Organization {
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
-  members       OrganizationMember[]
-  activeSessions Session[]            @relation("ActiveOrganizationSessions")
-  customers     Customer[]
-  plans         Plan[]
-  subscriptions Subscription[]
-  invoices      Invoice[]
+  members             OrganizationMember[]
+  activeSessions      Session[]            @relation("ActiveOrganizationSessions")
+  customers           Customer[]
+  customerActivities  CustomerActivity[]
+  plans               Plan[]
+  subscriptions       Subscription[]
+  invoices            Invoice[]
 
   @@map("organizations")
 }
@@ -108,23 +121,52 @@ model Session {
 }
 
 model Customer {
-  id             String         @id @default(uuid()) @db.Uuid
-  organizationId String         @db.Uuid
-  name           String         @db.VarChar(160)
-  email          String         @db.VarChar(320)
-  externalId     String?        @db.VarChar(160)
-  status         CustomerStatus @default(ACTIVE)
-  metadata       Json?
-  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+  id                  String         @id @default(uuid()) @db.Uuid
+  organizationId      String         @db.Uuid
+  name                String         @db.VarChar(160)
+  email               String         @db.VarChar(320)
+  phone               String?        @db.VarChar(40)
+  company             String?        @db.VarChar(160)
+  billingAddressLine1 String?        @db.VarChar(160)
+  billingAddressLine2 String?        @db.VarChar(160)
+  billingCity         String?        @db.VarChar(100)
+  billingRegion       String?        @db.VarChar(100)
+  billingPostalCode   String?        @db.VarChar(40)
+  billingCountry      String?        @db.VarChar(80)
+  notes               String?        @db.Text
+  externalId          String?        @db.VarChar(160)
+  status              CustomerStatus @default(ACTIVE)
+  metadata            Json?
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  activities    CustomerActivity[]
   subscriptions Subscription[]
   invoices      Invoice[]
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
+  @@index([organizationId, name])
+  @@index([organizationId, createdAt])
   @@map("customers")
+}
+
+model CustomerActivity {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  customerId     String               @db.Uuid
+  type           CustomerActivityType
+  message        String               @db.VarChar(500)
+  actorId        String?              @db.Uuid
+  actorName      String?              @db.VarChar(160)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, customerId, createdAt])
+  @@map("customer_activities")
 }
 
 model Plan {
@@ -133,10 +175,11 @@ model Plan {
   name           String          @db.VarChar(120)
   code           String          @db.VarChar(60)
   description    String?         @db.Text
-  amount         Decimal         @db.Decimal(12, 2)
+  amountMinor    Int             @db.Integer
   currency       String          @default("USD") @db.VarChar(3)
   interval       BillingInterval @default(MONTH)
-  active         Boolean         @default(true)
+  trialDays      Int             @default(0) @db.Integer
+  status         PlanStatus      @default(ACTIVE)
   createdAt      DateTime        @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
 
@@ -144,7 +187,9 @@ model Plan {
   subscriptions Subscription[]
 
   @@unique([organizationId, code])
-  @@index([organizationId, active])
+  @@index([organizationId, status])
+  @@index([organizationId, name])
+  @@index([organizationId, createdAt])
   @@map("plans")
 }
 

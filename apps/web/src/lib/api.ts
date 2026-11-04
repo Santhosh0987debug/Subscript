@@ -3,12 +3,23 @@ import type {
   ApiErrorCode,
   ApiErrorResponse,
   ApiFieldIssue,
+  CreateCustomerRequest,
+  CreatePlanRequest,
   CurrentOrganizationResponse,
+  CustomerListParams,
+  CustomerListResponse,
+  CustomerMutationResponse,
+  CustomerResponse,
   HealthResponse,
   LoginRequest,
+  PlanListParams,
+  PlanListResponse,
+  PlanResponse,
   RegisterRequest,
   SessionResponse,
+  UpdateCustomerRequest,
   UpdateOrganizationResponse,
+  UpdatePlanRequest,
 } from "@subscript/shared";
 
 const API_BASE_URL = (
@@ -35,9 +46,24 @@ export class ApiClientError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
+}
+
+function buildQuery(
+  params: Record<string, string | number | undefined>,
+): string {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  }
+
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
 }
 
 function isApiErrorResponse(value: unknown): value is ApiErrorResponse {
@@ -102,7 +128,17 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
     return rejectWithApiError(response);
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+
+  if (text.length === 0) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text) as T;
 }
 
 export async function fetchSession(): Promise<SessionResponse | null> {
@@ -172,6 +208,134 @@ export async function updateOrganizationName(
     method: "PATCH",
     body: { name },
   });
+}
+
+export async function listCustomers(
+  params: CustomerListParams = {},
+  signal?: AbortSignal,
+): Promise<CustomerListResponse> {
+  const query = buildQuery({
+    query: params.query?.trim(),
+    status: params.status,
+    sort: params.sort,
+    direction: params.direction,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<CustomerListResponse>(`${API_PATHS.customers}${query}`, {
+    signal,
+  });
+}
+
+export async function getCustomer(
+  customerId: string,
+  signal?: AbortSignal,
+): Promise<CustomerResponse> {
+  return requestJson<CustomerResponse>(API_PATHS.customer(customerId), {
+    signal,
+  });
+}
+
+export async function createCustomer(
+  input: CreateCustomerRequest,
+): Promise<CustomerMutationResponse> {
+  return requestJson<CustomerMutationResponse>(API_PATHS.customers, {
+    method: "POST",
+    body: input,
+  });
+}
+
+export async function updateCustomer(
+  customerId: string,
+  input: UpdateCustomerRequest,
+): Promise<CustomerMutationResponse> {
+  return requestJson<CustomerMutationResponse>(
+    API_PATHS.customer(customerId),
+    {
+      method: "PATCH",
+      body: input,
+    },
+  );
+}
+
+export async function archiveCustomer(
+  customerId: string,
+): Promise<CustomerMutationResponse> {
+  return requestJson<CustomerMutationResponse>(
+    API_PATHS.customerArchive(customerId),
+    { method: "POST" },
+  );
+}
+
+export async function restoreCustomer(
+  customerId: string,
+): Promise<CustomerMutationResponse> {
+  return requestJson<CustomerMutationResponse>(
+    API_PATHS.customerRestore(customerId),
+    { method: "POST" },
+  );
+}
+
+export async function listPlans(
+  params: PlanListParams = {},
+  signal?: AbortSignal,
+): Promise<PlanListResponse> {
+  const query = buildQuery({
+    query: params.query?.trim(),
+    status: params.status,
+    interval: params.interval,
+    sort: params.sort,
+    direction: params.direction,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<PlanListResponse>(`${API_PATHS.plans}${query}`, {
+    signal,
+  });
+}
+
+export async function getPlan(
+  planId: string,
+  signal?: AbortSignal,
+): Promise<PlanResponse> {
+  return requestJson<PlanResponse>(API_PATHS.plan(planId), { signal });
+}
+
+export async function createPlan(
+  input: CreatePlanRequest,
+): Promise<PlanResponse> {
+  return requestJson<PlanResponse>(API_PATHS.plans, {
+    method: "POST",
+    body: input,
+  });
+}
+
+export async function updatePlan(
+  planId: string,
+  input: UpdatePlanRequest,
+): Promise<PlanResponse> {
+  return requestJson<PlanResponse>(API_PATHS.plan(planId), {
+    method: "PATCH",
+    body: input,
+  });
+}
+
+export async function archivePlan(planId: string): Promise<PlanResponse> {
+  return requestJson<PlanResponse>(API_PATHS.planArchive(planId), {
+    method: "POST",
+  });
+}
+
+export async function restorePlan(planId: string): Promise<PlanResponse> {
+  return requestJson<PlanResponse>(API_PATHS.planRestore(planId), {
+    method: "POST",
+  });
+}
+
+export async function deletePlan(planId: string): Promise<void> {
+  await requestJson<void>(API_PATHS.plan(planId), { method: "DELETE" });
 }
 
 function isHealthResponse(value: unknown): value is HealthResponse {

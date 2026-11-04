@@ -32,3 +32,13 @@ export function parseParams<T>(schema: ZodType<T>, params: unknown): T {
 
   return result.data;
 }
+
+export function parseQuery<T>(schema: ZodType<T>, query: unknown): T {
+  const result = schema.safeParse(query);
+
+  if (!result.success) {
+    throw validationError("The request query is invalid.", result.error.issues);
+  }
+
+  return result.data;
+}

@@ -7,7 +7,8 @@ interface TextFieldProps {
   value: string;
   onChange: (value: string) => void;
   name?: string;
-  type?: "text" | "email" | "password";
+  type?: "text" | "email" | "password" | "tel";
+  inputMode?: "text" | "decimal" | "numeric" | "tel";
   autoComplete?: string;
   placeholder?: string;
   error?: string | undefined;
@@ -26,6 +27,7 @@ export function TextField({
   onChange,
   name,
   type = "text",
+  inputMode,
   autoComplete,
   placeholder,
   error,
@@ -59,6 +61,7 @@ export function TextField({
           id={id}
           name={name}
           type={inputType}
+          inputMode={inputMode}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           autoComplete={autoComplete}

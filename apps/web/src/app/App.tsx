@@ -7,7 +7,11 @@ import RegisterPage from "@/pages/RegisterPage";
 
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const CustomersPage = lazy(() => import("@/pages/CustomersPage"));
+const CustomerDetailPage = lazy(() => import("@/pages/CustomerDetailPage"));
+const CustomerFormPage = lazy(() => import("@/pages/CustomerFormPage"));
 const PlansPage = lazy(() => import("@/pages/PlansPage"));
+const PlanDetailPage = lazy(() => import("@/pages/PlanDetailPage"));
+const PlanFormPage = lazy(() => import("@/pages/PlanFormPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/SubscriptionsPage"));
 const InvoicesPage = lazy(() => import("@/pages/InvoicesPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
@@ -25,7 +29,16 @@ export function App() {
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />
           <Route path="customers" element={<CustomersPage />} />
+          <Route path="customers/new" element={<CustomerFormPage />} />
+          <Route path="customers/:customerId" element={<CustomerDetailPage />} />
+          <Route
+            path="customers/:customerId/edit"
+            element={<CustomerFormPage />}
+          />
           <Route path="plans" element={<PlansPage />} />
+          <Route path="plans/new" element={<PlanFormPage />} />
+          <Route path="plans/:planId" element={<PlanDetailPage />} />
+          <Route path="plans/:planId/edit" element={<PlanFormPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="settings" element={<SettingsPage />} />

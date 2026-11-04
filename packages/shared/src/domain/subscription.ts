@@ -31,9 +31,33 @@ export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 export const CUSTOMER_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
 export type CustomerStatus = (typeof CUSTOMER_STATUSES)[number];
 
+export const CUSTOMER_ACTIVITY_TYPES = [
+  "CREATED",
+  "UPDATED",
+  "ARCHIVED",
+  "RESTORED",
+] as const;
+export type CustomerActivityType = (typeof CUSTOMER_ACTIVITY_TYPES)[number];
+
+export const PLAN_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
 export interface Money {
   amountMinor: number;
   currency: CurrencyCode;
+}
+
+/**
+ * A postal billing address. Empty strings represent fields that have not been
+ * supplied; the API never exposes undefined address fields.
+ */
+export interface BillingAddress {
+  line1: string;
+  line2: string;
+  city: string;
+  region: string;
+  postalCode: string;
+  country: string;
 }
 
 export interface CustomerSummary {
@@ -50,9 +74,12 @@ export interface PlanSummary {
   organizationId: string;
   name: string;
   code: string;
+  description: string | null;
   price: Money;
   interval: BillingInterval;
-  active: boolean;
+  trialDays: number;
+  status: PlanStatus;
+  subscriptionCount: number;
 }
 
 export interface SubscriptionSummary {
