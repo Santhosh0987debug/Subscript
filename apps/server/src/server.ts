@@ -8,6 +8,9 @@ import { EnvValidationError, parseEnv } from "./config/env.js";
 import { createMemoryCustomerStore } from "./customers/store/memory.js";
 import { createPrismaCustomerStore } from "./customers/store/prisma.js";
 import { createPrismaClient } from "./db/prisma.js";
+import { createRazorpayGateway } from "./gateway/razorpay.js";
+import { createMemoryGatewayWebhookStore } from "./gateway/store/memory.js";
+import { createPrismaGatewayWebhookStore } from "./gateway/store/prisma.js";
 import { createMemoryInvoiceStore } from "./invoices/store/memory.js";
 import { createPrismaInvoiceStore } from "./invoices/store/prisma.js";
 import { logger } from "./lib/logger.js";
@@ -55,6 +58,16 @@ function startServer(): void {
   const invoiceStore = prisma
     ? createPrismaInvoiceStore(prisma)
     : createMemoryInvoiceStore();
+  const gatewayWebhookStore = prisma
+    ? createPrismaGatewayWebhookStore(prisma)
+    : createMemoryGatewayWebhookStore();
+  const gateway = env.razorpay
+    ? createRazorpayGateway({
+        keyId: env.razorpay.keyId,
+        keySecret: env.razorpay.keySecret,
+        webhookSecret: env.razorpay.webhookSecret,
+      })
+    : null;
 
   if (!prisma) {
     logger.warn(
@@ -74,6 +87,8 @@ function startServer(): void {
     planStore,
     subscriptionStore,
     invoiceStore,
+    gateway,
+    gatewayWebhookStore,
     corsOrigins: env.corsOrigins,
     cookieSecure: env.cookieSecure,
     sessionTtlMs: env.sessionTtlMs,
@@ -137,6 +152,9 @@ function startServer(): void {
       port: env.port,
       environment: env.nodeEnv,
       authStore: prisma ? "postgresql" : "memory",
+      gateway: gateway
+        ? { enabled: true, testMode: gateway.testMode }
+        : { enabled: false },
       corsOrigins: env.corsOrigins,
     });
   });

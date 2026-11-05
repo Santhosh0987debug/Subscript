@@ -52,7 +52,9 @@ export const INVOICE_ACTIVITY_TYPES = [
   "PAYMENT_RECORDED",
   "PAYMENT_SUCCEEDED",
   "PAYMENT_FAILED",
+  "PAYMENT_REFUND_REQUESTED",
   "PAYMENT_REFUNDED",
+  "PAYMENT_REFUND_FAILED",
 ] as const;
 export type InvoiceActivityType = (typeof INVOICE_ACTIVITY_TYPES)[number];
 
@@ -74,11 +76,18 @@ export const PAYMENT_METHODS = [
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 /**
- * Manual records are created by an operator inside Subscript. `GATEWAY` is
- * reserved for a future provider integration and is never produced in Phase 4.
+ * Manual records are created by an operator inside Subscript. GATEWAY records
+ * are created by a verified provider checkout or webhook.
  */
 export const PAYMENT_SOURCES = ["MANUAL", "GATEWAY"] as const;
 export type PaymentSource = (typeof PAYMENT_SOURCES)[number];
+
+export const PAYMENT_REFUND_STATUSES = [
+  "PENDING",
+  "SUCCEEDED",
+  "FAILED",
+] as const;
+export type PaymentRefundStatus = (typeof PAYMENT_REFUND_STATUSES)[number];
 
 export const CUSTOMER_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
 export type CustomerStatus = (typeof CUSTOMER_STATUSES)[number];
@@ -221,6 +230,30 @@ export interface InvoiceCustomerSnapshot {
   billingAddress: BillingAddress;
 }
 
+export interface PaymentGatewayDetails {
+  /** Provider key such as `razorpay`. */
+  provider: string;
+  orderId: string | null;
+  paymentId: string | null;
+  /** The provider's latest status for this attempt. */
+  status: string | null;
+}
+
+export interface PaymentRefund {
+  id: string;
+  paymentId: string;
+  /** Provider key such as `razorpay`, or `manual` for an internal refund. */
+  provider: string;
+  providerRefundId: string | null;
+  amount: Money;
+  status: PaymentRefundStatus;
+  reason: string | null;
+  processedAt: IsoDateString | null;
+  failedAt: IsoDateString | null;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+}
+
 export interface Payment {
   id: string;
   organizationId: string;
@@ -233,6 +266,10 @@ export interface Payment {
   source: PaymentSource;
   reference: string | null;
   note: string | null;
+  /** Present only for payments created through a payment gateway. */
+  gateway: PaymentGatewayDetails | null;
+  refundedAmount: Money;
+  refunds: PaymentRefund[];
   paidAt: IsoDateString | null;
   failedAt: IsoDateString | null;
   refundedAt: IsoDateString | null;

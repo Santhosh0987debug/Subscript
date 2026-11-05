@@ -17,6 +17,11 @@ import { createMemorySubscriptionStore } from "../../src/subscriptions/store/mem
 import type { SubscriptionStore } from "../../src/subscriptions/types.js";
 import { createMemoryInvoiceStore } from "../../src/invoices/store/memory.js";
 import type { InvoiceStore } from "../../src/invoices/types.js";
+import type { PaymentGateway } from "../../src/gateway/types.js";
+import type { GatewayWebhookStore } from "../../src/gateway/webhook-store.js";
+import {
+  createMemoryGatewayWebhookStore,
+} from "../../src/gateway/store/memory.js";
 
 export const TEST_ORIGIN = "http://localhost:5173";
 export const TEST_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -29,6 +34,7 @@ export interface TestApp {
   planStore: MemoryPlanStore;
   subscriptionStore: SubscriptionStore;
   invoiceStore: InvoiceStore;
+  gatewayWebhookStore: GatewayWebhookStore;
   sessionTtlMs: number;
 }
 
@@ -36,6 +42,8 @@ export interface TestAppOptions {
   authRateLimit?: RateLimitOptions | false;
   cookieSecure?: boolean;
   sessionTtlMs?: number;
+  gateway?: PaymentGateway | null;
+  gatewayWebhookStore?: GatewayWebhookStore;
 }
 
 export function createTestApp(options: TestAppOptions = {}): TestApp {
@@ -44,6 +52,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
   const planStore = createMemoryPlanStore();
   const subscriptionStore = createMemorySubscriptionStore();
   const invoiceStore = createMemoryInvoiceStore();
+  const gatewayWebhookStore =
+    options.gatewayWebhookStore ?? createMemoryGatewayWebhookStore();
   const sessionTtlMs = options.sessionTtlMs ?? TEST_SESSION_TTL_MS;
   const authService = createAuthService({
     store,
@@ -56,10 +66,14 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     planStore,
     subscriptionStore,
     invoiceStore,
+    gateway: options.gateway ?? null,
+    gatewayWebhookStore,
     corsOrigins: [TEST_ORIGIN],
     cookieSecure: options.cookieSecure ?? false,
     sessionTtlMs,
     authRateLimit: options.authRateLimit ?? false,
+    gatewayRateLimit: false,
+    webhookRateLimit: false,
   });
 
   return {
@@ -70,6 +84,7 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     planStore,
     subscriptionStore,
     invoiceStore,
+    gatewayWebhookStore,
     sessionTtlMs,
   };
 }

@@ -69,6 +69,15 @@ export {
 } from "./contracts/subscriptions.js";
 
 export {
+  type GatewayCheckoutSession,
+  type GatewayConfigResponse,
+  type GatewayRefundRequest,
+  type GatewayRefundResponse,
+  type GatewayWebhookResponse,
+  type VerifyGatewayPaymentRequest,
+} from "./contracts/gateway.js";
+
+export {
   INVOICE_SORT_FIELDS,
   INVOICE_STATUS_FILTERS,
   RECORDABLE_PAYMENT_STATUSES,
@@ -103,6 +112,7 @@ export {
   INVOICE_ACTIVITY_TYPES,
   INVOICE_STATUSES,
   PAYMENT_METHODS,
+  PAYMENT_REFUND_STATUSES,
   PAYMENT_SOURCES,
   PAYMENT_STATUSES,
   PLAN_STATUSES,
@@ -124,7 +134,10 @@ export {
   type IsoDateString,
   type Money,
   type Payment,
+  type PaymentGatewayDetails,
   type PaymentMethod,
+  type PaymentRefund,
+  type PaymentRefundStatus,
   type PaymentSource,
   type PaymentStatus,
   type PlanStatus,

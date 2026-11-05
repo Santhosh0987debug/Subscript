@@ -7,6 +7,13 @@ const DEFAULT_DEVELOPMENT_ORIGINS = [
 
 export type NodeEnvironment = "development" | "test" | "production";
 
+export interface RazorpayEnv {
+  keyId: string;
+  keySecret: string;
+  webhookSecret: string;
+  testMode: boolean;
+}
+
 export interface ServerEnv {
   nodeEnv: NodeEnvironment;
   port: number;
@@ -16,6 +23,7 @@ export interface ServerEnv {
   bcryptCost: number;
   cookieSecure: boolean;
   trustProxy: boolean;
+  razorpay: RazorpayEnv | null;
 }
 
 type EnvSource = Record<string, string | undefined>;
@@ -29,6 +37,9 @@ const envSchema = z.object({
   BCRYPT_COST: z.coerce.number().int().min(10).max(14).default(12),
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),
+  RAZORPAY_KEY_ID: z.string().trim().optional(),
+  RAZORPAY_KEY_SECRET: z.string().trim().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().trim().optional(),
 });
 
 export class EnvValidationError extends Error {
@@ -104,6 +115,9 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     BCRYPT_COST: bcryptCost,
     COOKIE_SECURE,
     TRUST_PROXY,
+    RAZORPAY_KEY_ID,
+    RAZORPAY_KEY_SECRET,
+    RAZORPAY_WEBHOOK_SECRET,
   } = parsed.data;
   const issues: string[] = [];
   const databaseUrl = DATABASE_URL && DATABASE_URL.length > 0 ? DATABASE_URL : null;
@@ -148,6 +162,67 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     issues.push("CORS_ORIGINS: must contain at least one allowed origin");
   }
 
+  const razorpayValues = {
+    keyId: RAZORPAY_KEY_ID && RAZORPAY_KEY_ID.length > 0 ? RAZORPAY_KEY_ID : null,
+    keySecret:
+      RAZORPAY_KEY_SECRET && RAZORPAY_KEY_SECRET.length > 0
+        ? RAZORPAY_KEY_SECRET
+        : null,
+    webhookSecret:
+      RAZORPAY_WEBHOOK_SECRET && RAZORPAY_WEBHOOK_SECRET.length > 0
+        ? RAZORPAY_WEBHOOK_SECRET
+        : null,
+  };
+  const configuredRazorpay = Object.values(razorpayValues).filter(
+    (value) => value !== null,
+  ).length;
+  let razorpay: RazorpayEnv | null = null;
+
+  if (configuredRazorpay > 0 && configuredRazorpay < 3) {
+    issues.push(
+      "RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET must be configured together",
+    );
+  } else if (configuredRazorpay === 3) {
+    const keyId = razorpayValues.keyId ?? "";
+    const keySecret = razorpayValues.keySecret ?? "";
+    const webhookSecret = razorpayValues.webhookSecret ?? "";
+    const isTestKey = keyId.startsWith("rzp_test_");
+    const isLiveKey = keyId.startsWith("rzp_live_");
+
+    if (!isTestKey && !isLiveKey) {
+      issues.push(
+        "RAZORPAY_KEY_ID: must start with rzp_test_ or rzp_live_",
+      );
+    }
+
+    if (keyId.length > 120) {
+      issues.push("RAZORPAY_KEY_ID: is too long");
+    }
+
+    if (keySecret.length < 8 || keySecret.length > 200) {
+      issues.push("RAZORPAY_KEY_SECRET: must be between 8 and 200 characters");
+    }
+
+    if (webhookSecret.length < 8 || webhookSecret.length > 200) {
+      issues.push(
+        "RAZORPAY_WEBHOOK_SECRET: must be between 8 and 200 characters",
+      );
+    }
+
+    if (isLiveKey && nodeEnv !== "production") {
+      issues.push(
+        "RAZORPAY_KEY_ID: live keys are only allowed when NODE_ENV=production; use a rzp_test_ key for development and tests",
+      );
+    }
+
+    razorpay = {
+      keyId,
+      keySecret,
+      webhookSecret,
+      testMode: isTestKey,
+    };
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -161,5 +236,6 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     bcryptCost,
     cookieSecure,
     trustProxy: TRUST_PROXY === "true",
+    razorpay,
   };
 }

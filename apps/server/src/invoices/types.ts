@@ -5,12 +5,14 @@ import type {
   InvoiceStatus,
   InvoiceStatusFilter,
   PaymentMethod,
+  PaymentRefundStatus,
   PaymentSource,
   PaymentStatus,
   RecordablePaymentStatus,
   SortDirection,
 } from "@subscript/shared";
 import type { InvoiceAction, PaymentAction } from "../billing/lifecycle.js";
+import type { NormalizedGatewayWebhookEvent } from "../gateway/types.js";
 
 export interface BillingActor {
   actorId: string | null;
@@ -33,6 +35,23 @@ export interface InvoiceActivityRecord {
   createdAt: Date;
 }
 
+export interface PaymentRefundRecord {
+  id: string;
+  organizationId: string;
+  invoiceId: string;
+  paymentId: string;
+  provider: string;
+  providerRefundId: string | null;
+  amountMinor: number;
+  currency: string;
+  status: PaymentRefundStatus;
+  reason: string | null;
+  processedAt: Date | null;
+  failedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface PaymentRecord {
   id: string;
   organizationId: string;
@@ -46,6 +65,13 @@ export interface PaymentRecord {
   source: PaymentSource;
   reference: string | null;
   note: string | null;
+  gatewayProvider: string | null;
+  gatewayOrderId: string | null;
+  gatewayPaymentId: string | null;
+  gatewayStatus: string | null;
+  gatewayMetadata: unknown;
+  refundedAmountMinor: number;
+  refunds: PaymentRefundRecord[];
   paidAt: Date | null;
   failedAt: Date | null;
   refundedAt: Date | null;
@@ -143,6 +169,87 @@ export interface PaymentMutationResult {
   invoice: InvoiceRecord;
 }
 
+export interface CreateGatewayCheckoutInput {
+  organizationId: string;
+  invoiceId: string;
+  provider: string;
+  actor: BillingActor;
+  /** A pending reservation older than this may be abandoned. */
+  staleAfterMs: number;
+}
+
+export interface GatewayCheckoutReservation {
+  payment: PaymentRecord;
+  invoice: InvoiceRecord;
+}
+
+export interface AttachGatewayOrderInput {
+  organizationId: string;
+  paymentId: string;
+  provider: string;
+  gatewayOrderId: string;
+  gatewayStatus: string;
+  metadata: unknown;
+}
+
+export interface FailGatewayPaymentInput {
+  organizationId: string;
+  paymentId: string;
+  provider: string;
+  gatewayStatus: string;
+  message: string;
+  actor: BillingActor;
+}
+
+export interface ConfirmGatewayPaymentInput {
+  organizationId: string;
+  paymentId: string;
+  provider: string;
+  gatewayOrderId: string;
+  gatewayPaymentId: string;
+  amountMinor: number;
+  currency: string;
+  gatewayStatus: string;
+  actor: BillingActor;
+}
+
+export interface ReserveGatewayRefundInput {
+  organizationId: string;
+  paymentId: string;
+  provider: string;
+  amountMinor: number;
+  reason: string | null;
+  actor: BillingActor;
+}
+
+export interface GatewayRefundReservation {
+  payment: PaymentRecord;
+  invoice: InvoiceRecord;
+  refund: PaymentRefundRecord;
+}
+
+export interface ApplyGatewayRefundInput {
+  organizationId: string;
+  refundId: string;
+  provider: string;
+  providerRefundId: string | null;
+  gatewayStatus: string;
+  status: Extract<PaymentRefundStatus, "PENDING" | "SUCCEEDED" | "FAILED">;
+  actor: BillingActor;
+}
+
+export interface GatewayRefundResult {
+  payment: PaymentRecord;
+  invoice: InvoiceRecord;
+  refund: PaymentRefundRecord;
+}
+
+export interface GatewayEventResult {
+  outcome: "applied" | "ignored";
+  organizationId: string | null;
+  paymentId: string | null;
+}
+
 export interface InvoiceStore {
   list(
     organizationId: string,
@@ -174,6 +281,23 @@ export interface InvoiceStore {
   transitionPayment(
     input: PaymentTransitionInput,
   ): Promise<PaymentMutationResult>;
+  reserveGatewayCheckout(
+    input: CreateGatewayCheckoutInput,
+  ): Promise<GatewayCheckoutReservation>;
+  attachGatewayOrder(input: AttachGatewayOrderInput): Promise<PaymentRecord>;
+  failGatewayPayment(input: FailGatewayPaymentInput): Promise<PaymentRecord>;
+  confirmGatewayPayment(
+    input: ConfirmGatewayPaymentInput,
+  ): Promise<PaymentMutationResult>;
+  reserveGatewayRefund(
+    input: ReserveGatewayRefundInput,
+  ): Promise<GatewayRefundReservation>;
+  applyGatewayRefund(
+    input: ApplyGatewayRefundInput,
+  ): Promise<GatewayRefundResult>;
+  processGatewayEvent(
+    event: NormalizedGatewayWebhookEvent,
+  ): Promise<GatewayEventResult>;
   listPaymentsForSubscription(
     organizationId: string,
     subscriptionId: string,

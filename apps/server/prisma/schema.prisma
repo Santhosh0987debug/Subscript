@@ -76,7 +76,9 @@ enum InvoiceActivityType {
   PAYMENT_RECORDED
   PAYMENT_SUCCEEDED
   PAYMENT_FAILED
+  PAYMENT_REFUND_REQUESTED
   PAYMENT_REFUNDED
+  PAYMENT_REFUND_FAILED
 }
 
 enum PaymentStatus {
@@ -97,6 +99,19 @@ enum PaymentMethod {
 enum PaymentSource {
   MANUAL
   GATEWAY
+}
+
+enum PaymentRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum GatewayWebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
 }
 
 model User {
@@ -133,6 +148,7 @@ model Organization {
   invoiceLineItems       InvoiceLineItem[]
   invoiceActivities      InvoiceActivity[]
   payments               Payment[]
+  paymentRefunds         PaymentRefund[]
   invoiceCounter         InvoiceCounter?
 
   @@map("organizations")
@@ -346,6 +362,7 @@ model Invoice {
   lineItems    InvoiceLineItem[]
   activities   InvoiceActivity[]
   payments     Payment[]
+  refunds      PaymentRefund[]
 
   @@unique([organizationId, number])
   @@unique([subscriptionId, periodStart, periodEnd])
@@ -403,17 +420,73 @@ model Payment {
   source         PaymentSource @default(MANUAL)
   reference      String?       @db.VarChar(160)
   note           String?       @db.VarChar(500)
+  gatewayProvider     String?   @db.VarChar(40)
+  gatewayOrderId      String?   @db.VarChar(160)
+  gatewayPaymentId    String?   @db.VarChar(160)
+  gatewayStatus       String?   @db.VarChar(80)
+  gatewayMetadata     Json?
+  refundedAmountMinor Int       @default(0) @db.Integer
   paidAt         DateTime?     @db.Timestamptz(3)
   failedAt       DateTime?     @db.Timestamptz(3)
   refundedAt     DateTime?     @db.Timestamptz(3)
   createdAt      DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  refunds      PaymentRefund[]
 
+  @@unique([gatewayProvider, gatewayOrderId])
+  @@unique([gatewayProvider, gatewayPaymentId])
   @@index([organizationId, invoiceId, createdAt])
   @@index([organizationId, status])
+  @@index([organizationId, gatewayPaymentId])
   @@index([invoiceId])
   @@map("payments")
+}
+
+model PaymentRefund {
+  id               String              @id @default(uuid()) @db.Uuid
+  organizationId   String              @db.Uuid
+  invoiceId        String              @db.Uuid
+  paymentId        String              @db.Uuid
+  provider         String              @db.VarChar(40)
+  providerRefundId String?             @db.VarChar(160)
+  amountMinor      Int                 @db.Integer
+  currency         String              @db.VarChar(3)
+  status           PaymentRefundStatus @default(PENDING)
+  reason           String?             @db.VarChar(500)
+  metadata         Json?
+  processedAt      DateTime?           @db.Timestamptz(3)
+  failedAt         DateTime?           @db.Timestamptz(3)
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payment      Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerRefundId])
+  @@index([organizationId, paymentId, createdAt])
+  @@index([organizationId, invoiceId, createdAt])
+  @@map("payment_refunds")
+}
+
+model GatewayWebhookEvent {
+  id              String              @id @default(uuid()) @db.Uuid
+  provider        String              @db.VarChar(40)
+  providerEventId String              @db.VarChar(160)
+  eventType       String              @db.VarChar(80)
+  status          GatewayWebhookStatus @default(RECEIVED)
+  payload         Json
+  organizationId  String?             @db.Uuid
+  paymentId       String?             @db.Uuid
+  error           String?             @db.Text
+  receivedAt      DateTime            @default(now()) @db.Timestamptz(3)
+  processedAt     DateTime?           @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  @@unique([provider, providerEventId])
+  @@index([provider, eventType, receivedAt])
+  @@map("gateway_webhook_events")
 }

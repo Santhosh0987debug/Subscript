@@ -15,7 +15,12 @@ import {
   resolvePaymentTransition,
 } from "../../billing/lifecycle.js";
 import type {
+  ApplyGatewayRefundInput,
+  AttachGatewayOrderInput,
   BillingActor,
+  ConfirmGatewayPaymentInput,
+  CreateGatewayCheckoutInput,
+  FailGatewayPaymentInput,
   GenerateInvoiceInput,
   InvoiceListOptions,
   InvoiceListResult,
@@ -23,8 +28,11 @@ import type {
   InvoiceStore,
   PaymentMutationResult,
   PaymentRecord,
+  PaymentRefundRecord,
   PaymentTransitionInput,
+  ReserveGatewayRefundInput,
 } from "../types.js";
+import type { NormalizedGatewayWebhookEvent } from "../../gateway/types.js";
 
 function compareText(left: string, right: string): number {
   return left.localeCompare(right, "en", { sensitivity: "base" });
@@ -102,6 +110,160 @@ export function createMemoryInvoiceStore(): InvoiceStore {
     const payment = payments.get(paymentId);
 
     return payment?.organizationId === organizationId ? payment : null;
+  }
+
+  function findPaymentByGateway(input: {
+    provider: string;
+    orderId: string | null;
+    paymentId: string | null;
+    internalPaymentId?: string | null;
+  }): PaymentRecord | null {
+    const internal = input.internalPaymentId
+      ? payments.get(input.internalPaymentId)
+      : null;
+
+    if (
+      internal &&
+      internal.source === "GATEWAY" &&
+      internal.gatewayProvider === input.provider &&
+      (!input.orderId || internal.gatewayOrderId === input.orderId) &&
+      (!input.paymentId || internal.gatewayPaymentId === input.paymentId)
+    ) {
+      return internal;
+    }
+
+    return (
+      [...payments.values()].find(
+        (payment) =>
+          payment.source === "GATEWAY" &&
+          payment.gatewayProvider === input.provider &&
+          ((input.orderId !== null &&
+            payment.gatewayOrderId === input.orderId) ||
+            (input.paymentId !== null &&
+              payment.gatewayPaymentId === input.paymentId)),
+      ) ?? null
+    );
+  }
+
+  function findRefundScoped(
+    organizationId: string,
+    refundId: string,
+  ): PaymentRefundRecord | null {
+    for (const payment of payments.values()) {
+      if (payment.organizationId !== organizationId) {
+        continue;
+      }
+
+      const refund = payment.refunds.find((entry) => entry.id === refundId);
+
+      if (refund) {
+        return refund;
+      }
+    }
+
+    return null;
+  }
+
+  function findRefundByProvider(
+    provider: string,
+    providerRefundId: string,
+  ): PaymentRefundRecord | null {
+    for (const payment of payments.values()) {
+      const refund = payment.refunds.find(
+        (entry) =>
+          entry.provider === provider &&
+          entry.providerRefundId === providerRefundId,
+      );
+
+      if (refund) {
+        return refund;
+      }
+    }
+
+    return null;
+  }
+
+  function pendingRefundMinor(payment: PaymentRecord): number {
+    return payment.refunds
+      .filter((refund) => refund.status === "PENDING")
+      .reduce((total, refund) => total + refund.amountMinor, 0);
+  }
+
+  function gatewayActor(provider: string): BillingActor {
+    return { actorId: null, actorName: `${provider} webhook` };
+  }
+
+  function applyRefundSuccess(
+    refund: PaymentRefundRecord,
+    payment: PaymentRecord,
+    invoice: InvoiceRecord,
+    actor: BillingActor,
+    now: Date,
+  ): void {
+    if (
+      refund.status === "SUCCEEDED" ||
+      payment.refundedAmountMinor + refund.amountMinor > payment.amountMinor
+    ) {
+      return;
+    }
+
+    if (payment.refundedAmountMinor + refund.amountMinor < 0) {
+      throw new BillingError("The refund would make the payment negative.");
+    }
+
+    refund.status = "SUCCEEDED";
+    refund.processedAt = now;
+    refund.failedAt = null;
+    refund.updatedAt = now;
+    payment.refundedAmountMinor += refund.amountMinor;
+    payment.refundedAt =
+      payment.refundedAmountMinor >= payment.amountMinor ? now : null;
+    payment.status =
+      payment.refundedAmountMinor >= payment.amountMinor
+        ? "REFUNDED"
+        : "SUCCEEDED";
+    payment.updatedAt = now;
+
+    const amountPaidMinor = invoice.amountPaidMinor - refund.amountMinor;
+
+    if (amountPaidMinor < 0) {
+      throw new BillingError("The refund would make the invoice negative.");
+    }
+
+    const next = invoiceStatusForBalance(invoice.totalMinor, amountPaidMinor);
+
+    invoice.amountPaidMinor = amountPaidMinor;
+    invoice.status = next.status;
+    invoice.paidAt = next.paidAt;
+    invoice.updatedAt = now;
+    activity(
+      invoice,
+      "PAYMENT_REFUNDED",
+      `Refunded ${refund.amountMinor} ${invoice.currency} minor units through ${refund.provider}.`,
+      actor,
+    );
+  }
+
+  function failRefund(
+    refund: PaymentRefundRecord,
+    invoice: InvoiceRecord,
+    actor: BillingActor,
+    now: Date,
+  ): void {
+    if (refund.status === "SUCCEEDED" || refund.status === "FAILED") {
+      return;
+    }
+
+    refund.status = "FAILED";
+    refund.failedAt = now;
+    refund.updatedAt = now;
+    invoice.updatedAt = now;
+    activity(
+      invoice,
+      "PAYMENT_REFUND_FAILED",
+      `A ${refund.amountMinor} ${invoice.currency} minor-unit refund through ${refund.provider} failed.`,
+      actor,
+    );
   }
 
   function findByPeriod(
@@ -330,6 +492,13 @@ export function createMemoryInvoiceStore(): InvoiceStore {
         source: "MANUAL",
         reference: input.reference,
         note: input.note,
+        gatewayProvider: null,
+        gatewayOrderId: null,
+        gatewayPaymentId: null,
+        gatewayStatus: null,
+        gatewayMetadata: null,
+        refundedAmountMinor: 0,
+        refunds: [],
         paidAt: input.status === "SUCCEEDED" ? now : null,
         failedAt: null,
         refundedAt: null,
@@ -376,6 +545,12 @@ export function createMemoryInvoiceStore(): InvoiceStore {
       if (!payment) {
         throw new PaymentStateConflictError(
           "That payment could not be found in this workspace.",
+        );
+      }
+
+      if (payment.source === "GATEWAY") {
+        throw new PaymentStateConflictError(
+          "Gateway payments are reconciled from verified provider events and cannot be changed manually.",
         );
       }
 
@@ -429,6 +604,7 @@ export function createMemoryInvoiceStore(): InvoiceStore {
       } else {
         payment.status = nextStatus;
         payment.refundedAt = now;
+        payment.refundedAmountMinor = payment.amountMinor;
         payment.updatedAt = now;
         invoice.amountPaidMinor -= payment.amountMinor;
         invoice.status = invoice.amountPaidMinor >= invoice.totalMinor
@@ -445,6 +621,865 @@ export function createMemoryInvoiceStore(): InvoiceStore {
       }
 
       return { payment, invoice } satisfies PaymentMutationResult;
+    },
+
+    async reserveGatewayCheckout(input: CreateGatewayCheckoutInput) {
+      const invoice = findScoped(input.organizationId, input.invoiceId);
+
+      if (!invoice) {
+        throw new PaymentStateConflictError(
+          "That invoice could not be found in this workspace.",
+        );
+      }
+
+      if (invoice.status !== "OPEN") {
+        throw new PaymentStateConflictError(
+          invoice.status === "PAID"
+            ? "This invoice is already paid in full."
+            : `Checkout is only available for open invoices. This invoice is ${invoice.status}.`,
+        );
+      }
+
+      const amountDue = invoice.totalMinor - invoice.amountPaidMinor;
+
+      if (amountDue <= 0) {
+        throw new PaymentStateConflictError(
+          "This invoice has no outstanding balance.",
+        );
+      }
+
+      const now = new Date();
+      const existing = invoice.payments.find(
+        (payment) =>
+          payment.source === "GATEWAY" &&
+          payment.gatewayProvider === input.provider &&
+          payment.status === "PENDING",
+      );
+
+      if (existing) {
+        if (now.getTime() - existing.updatedAt.getTime() < input.staleAfterMs) {
+          throw new PaymentStateConflictError(
+            "A gateway checkout is already in progress for this invoice. Finish or close it before starting another.",
+          );
+        }
+
+        existing.status = "FAILED";
+        existing.failedAt = now;
+        existing.gatewayStatus = "abandoned";
+        existing.updatedAt = now;
+        activity(
+          invoice,
+          "PAYMENT_FAILED",
+          "Expired an abandoned gateway checkout attempt.",
+          input.actor,
+        );
+      }
+
+      const payment: PaymentRecord = {
+        id: randomUUID(),
+        organizationId: input.organizationId,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.number,
+        subscriptionId: invoice.subscriptionId,
+        amountMinor: amountDue,
+        currency: invoice.currency,
+        method: "CARD",
+        status: "PENDING",
+        source: "GATEWAY",
+        reference: null,
+        note: null,
+        gatewayProvider: input.provider,
+        gatewayOrderId: null,
+        gatewayPaymentId: null,
+        gatewayStatus: "created",
+        gatewayMetadata: null,
+        refundedAmountMinor: 0,
+        refunds: [],
+        paidAt: null,
+        failedAt: null,
+        refundedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      payments.set(payment.id, payment);
+      invoice.payments.unshift(payment);
+      invoice.updatedAt = now;
+      activity(
+        invoice,
+        "PAYMENT_RECORDED",
+        `Started a ${input.provider} checkout for ${amountDue} ${invoice.currency} minor units.`,
+        input.actor,
+      );
+
+      return { payment, invoice };
+    },
+
+    async attachGatewayOrder(input: AttachGatewayOrderInput) {
+      const payment = findPaymentScoped(
+        input.organizationId,
+        input.paymentId,
+      );
+
+      if (!payment) {
+        throw new PaymentStateConflictError(
+          "That payment could not be found in this workspace.",
+        );
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== input.provider
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment does not belong to the configured gateway.",
+        );
+      }
+
+      if (
+        payment.gatewayOrderId &&
+        payment.gatewayOrderId !== input.gatewayOrderId
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment already belongs to a different gateway order.",
+        );
+      }
+
+      if (payment.status !== "PENDING") {
+        if (
+          payment.gatewayOrderId === input.gatewayOrderId &&
+          (payment.status === "SUCCEEDED" || payment.status === "REFUNDED")
+        ) {
+          return payment;
+        }
+
+        throw new PaymentStateConflictError(
+          "This payment attempt is no longer accepting a gateway order.",
+        );
+      }
+
+      payment.gatewayOrderId = input.gatewayOrderId;
+      payment.gatewayStatus = input.gatewayStatus;
+      payment.gatewayMetadata = input.metadata;
+      payment.updatedAt = new Date();
+
+      return payment;
+    },
+
+    async failGatewayPayment(input: FailGatewayPaymentInput) {
+      const payment = findPaymentScoped(
+        input.organizationId,
+        input.paymentId,
+      );
+
+      if (!payment) {
+        throw new PaymentStateConflictError(
+          "That payment could not be found in this workspace.",
+        );
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== input.provider
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment does not belong to the configured gateway.",
+        );
+      }
+
+      if (payment.status === "SUCCEEDED" || payment.status === "REFUNDED") {
+        return payment;
+      }
+
+      if (payment.status === "FAILED") {
+        return payment;
+      }
+
+      const invoice = findScoped(input.organizationId, payment.invoiceId);
+      const now = new Date();
+
+      payment.status = "FAILED";
+      payment.failedAt = now;
+      payment.gatewayStatus = input.gatewayStatus;
+      payment.updatedAt = now;
+
+      if (invoice) {
+        invoice.updatedAt = now;
+        activity(
+          invoice,
+          "PAYMENT_FAILED",
+          input.message,
+          input.actor,
+        );
+      }
+
+      return payment;
+    },
+
+    async confirmGatewayPayment(input: ConfirmGatewayPaymentInput) {
+      const payment = findPaymentScoped(
+        input.organizationId,
+        input.paymentId,
+      );
+
+      if (!payment) {
+        throw new PaymentStateConflictError(
+          "That payment could not be found in this workspace.",
+        );
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== input.provider
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment does not belong to the configured gateway.",
+        );
+      }
+
+      const invoice = findScoped(input.organizationId, payment.invoiceId);
+
+      if (!invoice) {
+        throw new PaymentStateConflictError(
+          "The invoice for this payment could not be found.",
+        );
+      }
+
+      if (payment.gatewayOrderId !== input.gatewayOrderId) {
+        throw new PaymentStateConflictError(
+          "The gateway order does not match this payment attempt.",
+        );
+      }
+
+      if (
+        payment.gatewayPaymentId &&
+        payment.gatewayPaymentId !== input.gatewayPaymentId
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment attempt is already linked to a different gateway payment.",
+        );
+      }
+
+      if (payment.status === "SUCCEEDED" || payment.status === "REFUNDED") {
+        return { payment, invoice } satisfies PaymentMutationResult;
+      }
+
+      if (input.amountMinor !== payment.amountMinor) {
+        throw new PaymentStateConflictError(
+          "The captured amount does not match the reserved payment amount.",
+        );
+      }
+
+      if (input.currency !== payment.currency) {
+        throw new PaymentStateConflictError(
+          "The captured currency does not match the invoice currency.",
+        );
+      }
+
+      if (invoice.status !== "OPEN") {
+        throw new PaymentStateConflictError(
+          `This payment cannot be applied because the invoice is ${invoice.status}.`,
+        );
+      }
+
+      if (payment.amountMinor > invoice.totalMinor - invoice.amountPaidMinor) {
+        throw new OverpaymentError();
+      }
+
+      const now = new Date();
+
+      payment.status = "SUCCEEDED";
+      payment.gatewayPaymentId = input.gatewayPaymentId;
+      payment.gatewayStatus = input.gatewayStatus;
+      payment.paidAt = now;
+      payment.failedAt = null;
+      payment.updatedAt = now;
+
+      invoice.amountPaidMinor += payment.amountMinor;
+      const next = invoiceStatusForBalance(
+        invoice.totalMinor,
+        invoice.amountPaidMinor,
+      );
+      invoice.status = next.status;
+      invoice.paidAt = next.paidAt;
+      invoice.updatedAt = now;
+      activity(
+        invoice,
+        "PAYMENT_SUCCEEDED",
+        `Confirmed a ${input.provider} payment of ${payment.amountMinor} ${invoice.currency} minor units.`,
+        input.actor,
+      );
+
+      return { payment, invoice } satisfies PaymentMutationResult;
+    },
+
+    async reserveGatewayRefund(input: ReserveGatewayRefundInput) {
+      const payment = findPaymentScoped(
+        input.organizationId,
+        input.paymentId,
+      );
+
+      if (!payment) {
+        throw new PaymentStateConflictError(
+          "That payment could not be found in this workspace.",
+        );
+      }
+
+      const invoice = findScoped(input.organizationId, payment.invoiceId);
+
+      if (!invoice) {
+        throw new PaymentStateConflictError(
+          "The invoice for this payment could not be found.",
+        );
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== input.provider
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment does not belong to the configured gateway.",
+        );
+      }
+
+      if (!payment.gatewayPaymentId) {
+        throw new PaymentStateConflictError(
+          "This payment has not been captured by the gateway yet.",
+        );
+      }
+
+      if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+        throw new PaymentStateConflictError(
+          "Only succeeded gateway payments can be refunded.",
+        );
+      }
+
+      const availableMinor =
+        payment.amountMinor -
+        payment.refundedAmountMinor -
+        pendingRefundMinor(payment);
+
+      if (input.amountMinor <= 0) {
+        throw new PaymentStateConflictError(
+          "Enter a refund amount greater than zero.",
+        );
+      }
+
+      if (input.amountMinor > availableMinor) {
+        throw new PaymentStateConflictError(
+          "This refund would exceed the refundable amount.",
+        );
+      }
+
+      const now = new Date();
+      const refund: PaymentRefundRecord = {
+        id: randomUUID(),
+        organizationId: input.organizationId,
+        invoiceId: invoice.id,
+        paymentId: payment.id,
+        provider: input.provider,
+        providerRefundId: null,
+        amountMinor: input.amountMinor,
+        currency: payment.currency,
+        status: "PENDING",
+        reason: input.reason,
+        processedAt: null,
+        failedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      payment.refunds.unshift(refund);
+      payment.updatedAt = now;
+      invoice.updatedAt = now;
+      activity(
+        invoice,
+        "PAYMENT_REFUND_REQUESTED",
+        `Requested a ${input.amountMinor} ${invoice.currency} minor-unit refund through ${input.provider}.`,
+        input.actor,
+      );
+
+      return { payment, invoice, refund };
+    },
+
+    async applyGatewayRefund(input: ApplyGatewayRefundInput) {
+      const refund = findRefundScoped(input.organizationId, input.refundId);
+
+      if (!refund) {
+        throw new PaymentStateConflictError(
+          "That refund could not be found in this workspace.",
+        );
+      }
+
+      if (refund.provider !== input.provider) {
+        throw new PaymentStateConflictError(
+          "This refund does not belong to the configured gateway.",
+        );
+      }
+
+      if (
+        input.providerRefundId &&
+        refund.providerRefundId &&
+        input.providerRefundId !== refund.providerRefundId
+      ) {
+        throw new PaymentStateConflictError(
+          "This refund is already linked to a different gateway refund.",
+        );
+      }
+
+      if (input.providerRefundId) {
+        const duplicate = findRefundByProvider(
+          input.provider,
+          input.providerRefundId,
+        );
+
+        if (duplicate && duplicate.id !== refund.id) {
+          throw new PaymentStateConflictError(
+            "That gateway refund is already linked to another payment.",
+          );
+        }
+      }
+
+      const payment = findPaymentScoped(
+        input.organizationId,
+        refund.paymentId,
+      );
+      const invoice = findScoped(input.organizationId, refund.invoiceId);
+
+      if (!payment || !invoice) {
+        throw new PaymentStateConflictError(
+          "The payment for this refund could not be found.",
+        );
+      }
+
+      if (refund.status === "SUCCEEDED") {
+        return { payment, invoice, refund };
+      }
+
+      if (refund.status === "FAILED" && input.status !== "FAILED") {
+        return { payment, invoice, refund };
+      }
+
+      if (input.status === "PENDING") {
+        refund.providerRefundId =
+          input.providerRefundId ?? refund.providerRefundId;
+        refund.updatedAt = new Date();
+        return { payment, invoice, refund };
+      }
+
+      const now = new Date();
+
+      refund.providerRefundId =
+        input.providerRefundId ?? refund.providerRefundId;
+
+      if (input.status === "FAILED") {
+        failRefund(refund, invoice, input.actor, now);
+        payment.updatedAt = now;
+        return { payment, invoice, refund };
+      }
+
+      if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+        throw new PaymentStateConflictError(
+          "The payment is not in a refundable state.",
+        );
+      }
+
+      if (refund.currency !== payment.currency) {
+        throw new PaymentStateConflictError(
+          "The refund currency does not match the payment.",
+        );
+      }
+
+      if (payment.refundedAmountMinor + refund.amountMinor > payment.amountMinor) {
+        throw new PaymentStateConflictError(
+          "This refund would exceed the captured amount.",
+        );
+      }
+
+      applyRefundSuccess(
+        refund,
+        payment,
+        invoice,
+        input.actor,
+        now,
+      );
+
+      return { payment, invoice, refund };
+    },
+
+    async processGatewayEvent(event: NormalizedGatewayWebhookEvent) {
+      if (event.kind === "unsupported") {
+        return {
+          outcome: "ignored",
+          organizationId: null,
+          paymentId: null,
+        } as const;
+      }
+
+      if (event.kind === "payment") {
+        const payment = findPaymentByGateway({
+          provider: event.provider,
+          orderId: event.gatewayOrderId,
+          paymentId: event.gatewayPaymentId,
+          internalPaymentId: event.internalPaymentId,
+        });
+
+        if (!payment) {
+          return {
+            outcome: "ignored",
+            organizationId: null,
+            paymentId: null,
+          } as const;
+        }
+
+        const invoice = findScoped(payment.organizationId, payment.invoiceId);
+
+        if (!invoice) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (
+          payment.source !== "GATEWAY" ||
+          payment.gatewayProvider !== event.provider ||
+          (payment.gatewayOrderId &&
+            event.gatewayOrderId &&
+            payment.gatewayOrderId !== event.gatewayOrderId) ||
+          (payment.gatewayPaymentId &&
+            payment.gatewayPaymentId !== event.gatewayPaymentId) ||
+          event.amountMinor !== payment.amountMinor ||
+          event.currency !== payment.currency
+        ) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        const actor = gatewayActor(event.provider);
+        const now = new Date();
+
+        if (event.eventType === "payment.failed") {
+          if (payment.status === "SUCCEEDED" || payment.status === "REFUNDED") {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          if (payment.status === "FAILED") {
+            payment.gatewayStatus = event.gatewayStatus;
+            payment.updatedAt = now;
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          payment.status = "FAILED";
+          payment.gatewayPaymentId = event.gatewayPaymentId;
+          payment.gatewayStatus = event.gatewayStatus;
+          payment.failedAt = now;
+          payment.updatedAt = now;
+          invoice.updatedAt = now;
+          activity(
+            invoice,
+            "PAYMENT_FAILED",
+            `The ${event.provider} payment attempt failed. The invoice balance is unchanged.`,
+            actor,
+          );
+
+          return {
+            outcome: "applied",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (payment.status === "SUCCEEDED" || payment.status === "REFUNDED") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (invoice.status !== "OPEN") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (payment.amountMinor > invoice.totalMinor - invoice.amountPaidMinor) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        payment.status = "SUCCEEDED";
+        payment.gatewayPaymentId = event.gatewayPaymentId;
+        payment.gatewayStatus = event.gatewayStatus;
+        payment.paidAt = now;
+        payment.failedAt = null;
+        payment.updatedAt = now;
+
+        invoice.amountPaidMinor += payment.amountMinor;
+        const next = invoiceStatusForBalance(
+          invoice.totalMinor,
+          invoice.amountPaidMinor,
+        );
+        invoice.status = next.status;
+        invoice.paidAt = next.paidAt;
+        invoice.updatedAt = now;
+        activity(
+          invoice,
+          "PAYMENT_SUCCEEDED",
+          `Confirmed a ${event.provider} payment of ${payment.amountMinor} ${invoice.currency} minor units from a verified webhook.`,
+          actor,
+        );
+
+        return {
+          outcome: "applied",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      let refund = findRefundByProvider(
+        event.provider,
+        event.gatewayRefundId,
+      );
+
+      if (!refund && event.internalRefundId) {
+        for (const candidate of payments.values()) {
+          const match = candidate.refunds.find(
+            (entry) => entry.id === event.internalRefundId,
+          );
+
+          if (match) {
+            refund = match;
+            break;
+          }
+        }
+      }
+
+      if (refund && refund.provider !== event.provider) {
+        refund = null;
+      }
+
+      let payment = refund
+        ? payments.get(refund.paymentId) ?? null
+        : findPaymentByGateway({
+            provider: event.provider,
+            orderId: null,
+            paymentId: event.gatewayPaymentId,
+            internalPaymentId: null,
+          });
+
+      if (!payment) {
+        return {
+          outcome: "ignored",
+          organizationId: null,
+          paymentId: null,
+        } as const;
+      }
+
+      const invoice = findScoped(payment.organizationId, payment.invoiceId);
+
+      if (!invoice) {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== event.provider ||
+        (payment.gatewayPaymentId &&
+          payment.gatewayPaymentId !== event.gatewayPaymentId)
+      ) {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (
+        refund &&
+        (refund.currency !== event.currency ||
+          refund.amountMinor !== event.amountMinor)
+      ) {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      const actor = gatewayActor(event.provider);
+      const now = new Date();
+
+      if (!refund) {
+        if (event.eventType === "refund.failed") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        refund = payment.refunds.find(
+          (entry) =>
+            entry.status === "PENDING" &&
+            entry.amountMinor === event.amountMinor &&
+            entry.currency === event.currency &&
+            (!entry.providerRefundId ||
+              entry.providerRefundId === event.gatewayRefundId),
+        ) ?? null;
+
+        if (!refund) {
+          const availableMinor =
+            payment.amountMinor -
+            payment.refundedAmountMinor -
+            pendingRefundMinor(payment);
+
+          if (
+            (payment.status !== "SUCCEEDED" &&
+              payment.status !== "REFUNDED") ||
+            event.amountMinor <= 0 ||
+            event.amountMinor > availableMinor
+          ) {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          refund = {
+            id: randomUUID(),
+            organizationId: payment.organizationId,
+            invoiceId: payment.invoiceId,
+            paymentId: payment.id,
+            provider: event.provider,
+            providerRefundId: event.gatewayRefundId,
+            amountMinor: event.amountMinor,
+            currency: event.currency,
+            status: "PENDING",
+            reason: event.reason,
+            processedAt: null,
+            failedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          };
+          payment.refunds.unshift(refund);
+          payment.updatedAt = now;
+          invoice.updatedAt = now;
+          activity(
+            invoice,
+            "PAYMENT_REFUND_REQUESTED",
+            `A ${event.amountMinor} ${invoice.currency} minor-unit refund was created through ${event.provider}.`,
+            actor,
+          );
+        }
+      }
+
+      if (refund.providerRefundId === null) {
+        refund.providerRefundId = event.gatewayRefundId;
+      } else if (refund.providerRefundId !== event.gatewayRefundId) {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (event.eventType === "refund.created") {
+        if (refund.status !== "PENDING") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (!refund.reason && event.reason) {
+          refund.reason = event.reason;
+        }
+
+        refund.updatedAt = now;
+        return {
+          outcome: "applied",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (event.eventType === "refund.failed") {
+        if (refund.status !== "PENDING") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        failRefund(refund, invoice, actor, now);
+        payment.updatedAt = now;
+        return {
+          outcome: "applied",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (refund.status === "FAILED" || refund.status === "SUCCEEDED") {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      if (
+        payment.refundedAmountMinor + refund.amountMinor >
+        payment.amountMinor
+      ) {
+        return {
+          outcome: "ignored",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
+      }
+
+      applyRefundSuccess(refund, payment, invoice, actor, now);
+
+      return {
+        outcome: "applied",
+        organizationId: payment.organizationId,
+        paymentId: payment.id,
+      } as const;
     },
 
     async listPaymentsForSubscription(organizationId, subscriptionId) {

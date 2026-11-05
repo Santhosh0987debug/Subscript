@@ -1,6 +1,8 @@
 import type {
   InvoiceStatus,
   Payment as PaymentModel,
+  PaymentRefund as PaymentRefundModel,
+  PaymentRefundStatus,
   Prisma,
   PrismaClient,
 } from "../../generated/prisma/client.js";
@@ -17,7 +19,12 @@ import {
   resolvePaymentTransition,
 } from "../../billing/lifecycle.js";
 import type {
+  ApplyGatewayRefundInput,
+  AttachGatewayOrderInput,
   BillingActor,
+  ConfirmGatewayPaymentInput,
+  CreateGatewayCheckoutInput,
+  FailGatewayPaymentInput,
   GenerateInvoiceInput,
   InvoiceActivityRecord,
   InvoiceListOptions,
@@ -26,13 +33,19 @@ import type {
   InvoiceStore,
   PaymentMutationResult,
   PaymentRecord,
+  PaymentRefundRecord,
   PaymentTransitionInput,
+  ReserveGatewayRefundInput,
 } from "../types.js";
+import type { NormalizedGatewayWebhookEvent } from "../../gateway/types.js";
 
 const invoiceInclude = {
   lineItems: { orderBy: { position: "asc" } },
   activities: { orderBy: { createdAt: "desc" } },
-  payments: { orderBy: { createdAt: "desc" } },
+  payments: {
+    orderBy: { createdAt: "desc" },
+    include: { refunds: { orderBy: { createdAt: "desc" } } },
+  },
 } satisfies Prisma.InvoiceInclude;
 
 type InvoiceRow = Prisma.InvoiceGetPayload<{
@@ -41,11 +54,16 @@ type InvoiceRow = Prisma.InvoiceGetPayload<{
 
 const paymentInclude = {
   invoice: { select: { number: true, subscriptionId: true } },
+  refunds: { orderBy: { createdAt: "desc" } },
 } satisfies Prisma.PaymentInclude;
 
 type PaymentRow = Prisma.PaymentGetPayload<{
   include: typeof paymentInclude;
 }>;
+
+type PaymentWithRefunds = PaymentModel & {
+  refunds: PaymentRefundModel[];
+};
 
 interface LockedInvoice {
   id: string;
@@ -60,13 +78,58 @@ interface LockedInvoice {
 
 interface LockedPayment {
   id: string;
+  organizationId: string;
   status: string;
   amountMinor: number;
+  currency: string;
   invoiceId: string;
+  source: string;
+  refundedAmountMinor: number;
+  gatewayProvider: string | null;
+  gatewayOrderId: string | null;
+  gatewayPaymentId: string | null;
+  failedAt: Date | null;
+  paidAt: Date | null;
+  refundedAt: Date | null;
+  updatedAt: Date;
+}
+
+interface LockedRefund {
+  id: string;
+  organizationId: string;
+  invoiceId: string;
+  paymentId: string;
+  provider: string;
+  providerRefundId: string | null;
+  amountMinor: number;
+  currency: string;
+  status: string;
+  reason: string | null;
+  processedAt: Date | null;
+  failedAt: Date | null;
+}
+
+function mapRefund(refund: PaymentRefundModel): PaymentRefundRecord {
+  return {
+    id: refund.id,
+    organizationId: refund.organizationId,
+    invoiceId: refund.invoiceId,
+    paymentId: refund.paymentId,
+    provider: refund.provider,
+    providerRefundId: refund.providerRefundId,
+    amountMinor: refund.amountMinor,
+    currency: refund.currency,
+    status: refund.status,
+    reason: refund.reason,
+    processedAt: refund.processedAt,
+    failedAt: refund.failedAt,
+    createdAt: refund.createdAt,
+    updatedAt: refund.updatedAt,
+  };
 }
 
 function mapPayment(
-  payment: PaymentModel,
+  payment: PaymentWithRefunds,
   invoiceNumber: string,
   subscriptionId: string | null,
 ): PaymentRecord {
@@ -83,6 +146,13 @@ function mapPayment(
     source: payment.source,
     reference: payment.reference,
     note: payment.note,
+    gatewayProvider: payment.gatewayProvider,
+    gatewayOrderId: payment.gatewayOrderId,
+    gatewayPaymentId: payment.gatewayPaymentId,
+    gatewayStatus: payment.gatewayStatus,
+    gatewayMetadata: payment.gatewayMetadata,
+    refundedAmountMinor: payment.refundedAmountMinor,
+    refunds: payment.refunds.map(mapRefund),
     paidAt: payment.paidAt,
     failedAt: payment.failedAt,
     refundedAt: payment.refundedAt,
@@ -219,7 +289,9 @@ type InvoiceActivityKind =
   | "PAYMENT_RECORDED"
   | "PAYMENT_SUCCEEDED"
   | "PAYMENT_FAILED"
-  | "PAYMENT_REFUNDED";
+  | "PAYMENT_REFUND_REQUESTED"
+  | "PAYMENT_REFUNDED"
+  | "PAYMENT_REFUND_FAILED";
 
 function invoiceActivityFields(
   organizationId: string,
@@ -247,6 +319,69 @@ function invoiceActivityData(
     ...invoiceActivityFields(organizationId, type, message, actor),
     invoiceId,
   };
+}
+
+async function loadPaymentRecord(
+  tx: Prisma.TransactionClient,
+  paymentId: string,
+  invoiceNumber: string,
+  subscriptionId: string | null,
+): Promise<PaymentRecord> {
+  const payment = await tx.payment.findUniqueOrThrow({
+    where: { id: paymentId },
+    include: { refunds: { orderBy: { createdAt: "desc" } } },
+  });
+
+  return mapPayment(payment, invoiceNumber, subscriptionId);
+}
+
+async function loadRefundRecord(
+  tx: Prisma.TransactionClient,
+  refundId: string,
+): Promise<PaymentRefundRecord> {
+  const refund = await tx.paymentRefund.findUniqueOrThrow({
+    where: { id: refundId },
+  });
+
+  return mapRefund(refund);
+}
+
+function gatewayMetadata(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+async function lockInvoiceRow(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  invoiceId: string,
+): Promise<LockedInvoice | null> {
+  const rows = await tx.$queryRaw<Array<LockedInvoice>>`
+    SELECT "id", "status", "totalMinor", "amountPaidMinor", "dueInDays",
+           "currency", "number", "subscriptionId"
+    FROM "invoices"
+    WHERE "id" = ${invoiceId} AND "organizationId" = ${organizationId}
+    FOR UPDATE
+  `;
+
+  return rows[0] ?? null;
+}
+
+async function lockPaymentRow(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  paymentId: string,
+): Promise<LockedPayment | null> {
+  const rows = await tx.$queryRaw<Array<LockedPayment>>`
+    SELECT "id", "organizationId", "status", "amountMinor", "currency",
+           "invoiceId", "source", "refundedAmountMinor", "gatewayProvider",
+           "gatewayOrderId", "gatewayPaymentId", "failedAt", "paidAt",
+           "refundedAt", "updatedAt"
+    FROM "payments"
+    WHERE "id" = ${paymentId} AND "organizationId" = ${organizationId}
+    FOR UPDATE
+  `;
+
+  return rows[0] ?? null;
 }
 
 export function createPrismaInvoiceStore(
@@ -614,7 +749,7 @@ export function createPrismaInvoiceStore(
 
         return {
           payment: mapPayment(
-            payment,
+            { ...payment, refunds: [] },
             current.number,
             current.subscriptionId,
           ),
@@ -626,7 +761,10 @@ export function createPrismaInvoiceStore(
     async transitionPayment(input: PaymentTransitionInput) {
       return prisma.$transaction(async (tx) => {
         const lockedPayments = await tx.$queryRaw<Array<LockedPayment>>`
-          SELECT "id", "status", "amountMinor", "invoiceId"
+          SELECT "id", "organizationId", "status", "amountMinor", "currency",
+                 "invoiceId", "source", "refundedAmountMinor", "gatewayProvider",
+                 "gatewayOrderId", "gatewayPaymentId", "failedAt", "paidAt",
+                 "refundedAt", "updatedAt"
           FROM "payments"
           WHERE "id" = ${input.paymentId} AND "organizationId" = ${input.organizationId}
           FOR UPDATE
@@ -636,6 +774,12 @@ export function createPrismaInvoiceStore(
         if (!currentPayment) {
           throw new PaymentStateConflictError(
             "That payment could not be found in this workspace.",
+          );
+        }
+
+        if (currentPayment.source === "GATEWAY") {
+          throw new PaymentStateConflictError(
+            "Gateway payments are reconciled from verified provider events and cannot be changed manually.",
           );
         }
 
@@ -721,7 +865,11 @@ export function createPrismaInvoiceStore(
 
           await tx.payment.update({
             where: { id: currentPayment.id },
-            data: { status: nextStatus, refundedAt: now },
+            data: {
+              status: nextStatus,
+              refundedAt: now,
+              refundedAmountMinor: currentPayment.amountMinor,
+            },
           });
           await tx.invoice.update({
             where: { id: invoiceRow.id },
@@ -749,6 +897,7 @@ export function createPrismaInvoiceStore(
 
         const payment = await tx.payment.findUniqueOrThrow({
           where: { id: currentPayment.id },
+          include: { refunds: true },
         });
         const invoice = await tx.invoice.findUniqueOrThrow({
           where: { id: invoiceRow.id },
@@ -763,6 +912,1409 @@ export function createPrismaInvoiceStore(
           ),
           invoice: mapInvoice(invoice),
         } satisfies PaymentMutationResult;
+      });
+    },
+
+    async reserveGatewayCheckout(input: CreateGatewayCheckoutInput) {
+      return prisma.$transaction(async (tx) => {
+        const current = await lockInvoiceRow(
+          tx,
+          input.organizationId,
+          input.invoiceId,
+        );
+
+        if (!current) {
+          throw new PaymentStateConflictError(
+            "That invoice could not be found in this workspace.",
+          );
+        }
+
+        if (current.status !== "OPEN") {
+          throw new PaymentStateConflictError(
+            current.status === "PAID"
+              ? "This invoice is already paid in full."
+              : `Checkout is only available for open invoices. This invoice is ${current.status}.`,
+          );
+        }
+
+        const amountDue = current.totalMinor - current.amountPaidMinor;
+
+        if (amountDue <= 0) {
+          throw new PaymentStateConflictError(
+            "This invoice has no outstanding balance.",
+          );
+        }
+
+        const pending = await tx.$queryRaw<Array<LockedPayment>>`
+          SELECT "id", "organizationId", "status", "amountMinor", "currency",
+                 "invoiceId", "source", "refundedAmountMinor", "gatewayProvider",
+                 "gatewayOrderId", "gatewayPaymentId", "failedAt", "paidAt",
+                 "refundedAt", "updatedAt"
+          FROM "payments"
+          WHERE "organizationId" = ${input.organizationId}
+            AND "invoiceId" = ${current.id}
+            AND "source" = 'GATEWAY'
+            AND "gatewayProvider" = ${input.provider}
+            AND "status" = 'PENDING'
+          ORDER BY "createdAt" DESC
+          FOR UPDATE
+        `;
+        const existing = pending[0];
+        const now = new Date();
+
+        if (existing) {
+          if (now.getTime() - existing.updatedAt.getTime() < input.staleAfterMs) {
+            throw new PaymentStateConflictError(
+              "A gateway checkout is already in progress for this invoice. Finish or close it before starting another.",
+            );
+          }
+
+          await tx.payment.update({
+            where: { id: existing.id },
+            data: {
+              status: "FAILED",
+              failedAt: now,
+              gatewayStatus: "abandoned",
+            },
+          });
+          await tx.invoiceActivity.create({
+            data: invoiceActivityData(
+              input.organizationId,
+              current.id,
+              "PAYMENT_FAILED",
+              "Expired an abandoned gateway checkout attempt.",
+              input.actor,
+            ),
+          });
+        }
+
+        const payment = await tx.payment.create({
+          data: {
+            organizationId: input.organizationId,
+            invoiceId: current.id,
+            amountMinor: amountDue,
+            currency: current.currency,
+            method: "CARD",
+            status: "PENDING",
+            source: "GATEWAY",
+            gatewayProvider: input.provider,
+            gatewayStatus: "created",
+          },
+        });
+
+        await tx.invoice.update({
+          where: { id: current.id },
+          data: { updatedAt: now },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            input.organizationId,
+            current.id,
+            "PAYMENT_RECORDED",
+            `Started a ${input.provider} checkout for ${amountDue} ${current.currency} minor units.`,
+            input.actor,
+          ),
+        });
+
+        return {
+          payment: mapPayment(
+            { ...payment, refunds: [] },
+            current.number,
+            current.subscriptionId,
+          ),
+          invoice: mapInvoice(
+            await tx.invoice.findUniqueOrThrow({
+              where: { id: current.id },
+              include: invoiceInclude,
+            }),
+          ),
+        };
+      });
+    },
+
+    async attachGatewayOrder(input: AttachGatewayOrderInput) {
+      return prisma.$transaction(async (tx) => {
+        const current = await lockPaymentRow(
+          tx,
+          input.organizationId,
+          input.paymentId,
+        );
+
+        if (!current) {
+          throw new PaymentStateConflictError(
+            "That payment could not be found in this workspace.",
+          );
+        }
+
+        if (
+          current.source !== "GATEWAY" ||
+          current.gatewayProvider !== input.provider
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment does not belong to the configured gateway.",
+          );
+        }
+
+        if (
+          current.gatewayOrderId &&
+          current.gatewayOrderId !== input.gatewayOrderId
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment already belongs to a different gateway order.",
+          );
+        }
+
+        const invoice = await tx.invoice.findUniqueOrThrow({
+          where: { id: current.invoiceId },
+          select: { number: true, subscriptionId: true },
+        });
+
+        if (current.status !== "PENDING") {
+          if (
+            current.gatewayOrderId === input.gatewayOrderId &&
+            (current.status === "SUCCEEDED" || current.status === "REFUNDED")
+          ) {
+            return loadPaymentRecord(
+              tx,
+              current.id,
+              invoice.number,
+              invoice.subscriptionId,
+            );
+          }
+
+          throw new PaymentStateConflictError(
+            "This payment attempt is no longer accepting a gateway order.",
+          );
+        }
+
+        await tx.payment.update({
+          where: { id: current.id },
+          data: {
+            gatewayOrderId: input.gatewayOrderId,
+            gatewayStatus: input.gatewayStatus,
+            ...(input.metadata === undefined
+              ? {}
+              : { gatewayMetadata: gatewayMetadata(input.metadata) }),
+          },
+        });
+
+        return loadPaymentRecord(
+          tx,
+          current.id,
+          invoice.number,
+          invoice.subscriptionId,
+        );
+      });
+    },
+
+    async failGatewayPayment(input: FailGatewayPaymentInput) {
+      return prisma.$transaction(async (tx) => {
+        const current = await lockPaymentRow(
+          tx,
+          input.organizationId,
+          input.paymentId,
+        );
+
+        if (!current) {
+          throw new PaymentStateConflictError(
+            "That payment could not be found in this workspace.",
+          );
+        }
+
+        if (
+          current.source !== "GATEWAY" ||
+          current.gatewayProvider !== input.provider
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment does not belong to the configured gateway.",
+          );
+        }
+
+        const invoice = await tx.invoice.findUniqueOrThrow({
+          where: { id: current.invoiceId },
+          select: { number: true, subscriptionId: true },
+        });
+
+        if (
+          current.status === "SUCCEEDED" ||
+          current.status === "REFUNDED" ||
+          current.status === "FAILED"
+        ) {
+          return loadPaymentRecord(
+            tx,
+            current.id,
+            invoice.number,
+            invoice.subscriptionId,
+          );
+        }
+
+        const now = new Date();
+
+        await tx.payment.update({
+          where: { id: current.id },
+          data: {
+            status: "FAILED",
+            failedAt: now,
+            gatewayStatus: input.gatewayStatus,
+          },
+        });
+        await tx.invoice.update({
+          where: { id: current.invoiceId },
+          data: { updatedAt: now },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            input.organizationId,
+            current.invoiceId,
+            "PAYMENT_FAILED",
+            input.message,
+            input.actor,
+          ),
+        });
+
+        return loadPaymentRecord(
+          tx,
+          current.id,
+          invoice.number,
+          invoice.subscriptionId,
+        );
+      });
+    },
+
+    async confirmGatewayPayment(input: ConfirmGatewayPaymentInput) {
+      return prisma.$transaction(async (tx) => {
+        const currentPayment = await lockPaymentRow(
+          tx,
+          input.organizationId,
+          input.paymentId,
+        );
+
+        if (!currentPayment) {
+          throw new PaymentStateConflictError(
+            "That payment could not be found in this workspace.",
+          );
+        }
+
+        if (
+          currentPayment.source !== "GATEWAY" ||
+          currentPayment.gatewayProvider !== input.provider
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment does not belong to the configured gateway.",
+          );
+        }
+
+        const currentInvoice = await lockInvoiceRow(
+          tx,
+          input.organizationId,
+          currentPayment.invoiceId,
+        );
+
+        if (!currentInvoice) {
+          throw new PaymentStateConflictError(
+            "The invoice for this payment could not be found.",
+          );
+        }
+
+        if (currentPayment.gatewayOrderId !== input.gatewayOrderId) {
+          throw new PaymentStateConflictError(
+            "The gateway order does not match this payment attempt.",
+          );
+        }
+
+        if (
+          currentPayment.gatewayPaymentId &&
+          currentPayment.gatewayPaymentId !== input.gatewayPaymentId
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment attempt is already linked to a different gateway payment.",
+          );
+        }
+
+        if (
+          currentPayment.status === "SUCCEEDED" ||
+          currentPayment.status === "REFUNDED"
+        ) {
+          return {
+            payment: await loadPaymentRecord(
+              tx,
+              currentPayment.id,
+              currentInvoice.number,
+              currentInvoice.subscriptionId,
+            ),
+            invoice: mapInvoice(
+              await tx.invoice.findUniqueOrThrow({
+                where: { id: currentInvoice.id },
+                include: invoiceInclude,
+              }),
+            ),
+          } satisfies PaymentMutationResult;
+        }
+
+        if (input.amountMinor !== currentPayment.amountMinor) {
+          throw new PaymentStateConflictError(
+            "The captured amount does not match the reserved payment amount.",
+          );
+        }
+
+        if (input.currency !== currentPayment.currency) {
+          throw new PaymentStateConflictError(
+            "The captured currency does not match the invoice currency.",
+          );
+        }
+
+        if (currentInvoice.status !== "OPEN") {
+          throw new PaymentStateConflictError(
+            `This payment cannot be applied because the invoice is ${currentInvoice.status}.`,
+          );
+        }
+
+        if (
+          currentPayment.amountMinor >
+          currentInvoice.totalMinor - currentInvoice.amountPaidMinor
+        ) {
+          throw new OverpaymentError();
+        }
+
+        const now = new Date();
+
+        await tx.payment.update({
+          where: { id: currentPayment.id },
+          data: {
+            status: "SUCCEEDED",
+            gatewayPaymentId: input.gatewayPaymentId,
+            gatewayStatus: input.gatewayStatus,
+            paidAt: now,
+            failedAt: null,
+          },
+        });
+
+        const amountPaidMinor =
+          currentInvoice.amountPaidMinor + currentPayment.amountMinor;
+        const next = invoiceStatusForBalance(
+          currentInvoice.totalMinor,
+          amountPaidMinor,
+        );
+
+        await tx.invoice.update({
+          where: { id: currentInvoice.id },
+          data: {
+            amountPaidMinor,
+            status: next.status,
+            paidAt: next.paidAt,
+          },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            input.organizationId,
+            currentInvoice.id,
+            "PAYMENT_SUCCEEDED",
+            `Confirmed a ${input.provider} payment of ${currentPayment.amountMinor} ${currentInvoice.currency} minor units.`,
+            input.actor,
+          ),
+        });
+
+        return {
+          payment: await loadPaymentRecord(
+            tx,
+            currentPayment.id,
+            currentInvoice.number,
+            currentInvoice.subscriptionId,
+          ),
+          invoice: mapInvoice(
+            await tx.invoice.findUniqueOrThrow({
+              where: { id: currentInvoice.id },
+              include: invoiceInclude,
+            }),
+          ),
+        } satisfies PaymentMutationResult;
+      });
+    },
+
+    async reserveGatewayRefund(input: ReserveGatewayRefundInput) {
+      return prisma.$transaction(async (tx) => {
+        const payment = await lockPaymentRow(
+          tx,
+          input.organizationId,
+          input.paymentId,
+        );
+
+        if (!payment) {
+          throw new PaymentStateConflictError(
+            "That payment could not be found in this workspace.",
+          );
+        }
+
+        const invoice = await lockInvoiceRow(
+          tx,
+          input.organizationId,
+          payment.invoiceId,
+        );
+
+        if (!invoice) {
+          throw new PaymentStateConflictError(
+            "The invoice for this payment could not be found.",
+          );
+        }
+
+        if (
+          payment.source !== "GATEWAY" ||
+          payment.gatewayProvider !== input.provider
+        ) {
+          throw new PaymentStateConflictError(
+            "This payment does not belong to the configured gateway.",
+          );
+        }
+
+        if (!payment.gatewayPaymentId) {
+          throw new PaymentStateConflictError(
+            "This payment has not been captured by the gateway yet.",
+          );
+        }
+
+        if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+          throw new PaymentStateConflictError(
+            "Only succeeded gateway payments can be refunded.",
+          );
+        }
+
+        const pendingRows = await tx.$queryRaw<
+          Array<{ pending: bigint | number | string }>
+        >`
+          SELECT COALESCE(SUM("amountMinor"), 0)::bigint AS "pending"
+          FROM "payment_refunds"
+          WHERE "paymentId" = ${payment.id} AND "status" = 'PENDING'
+        `;
+        const pendingMinor = Number(pendingRows[0]?.pending ?? 0);
+        const availableMinor =
+          payment.amountMinor - payment.refundedAmountMinor - pendingMinor;
+
+        if (input.amountMinor <= 0) {
+          throw new PaymentStateConflictError(
+            "Enter a refund amount greater than zero.",
+          );
+        }
+
+        if (input.amountMinor > availableMinor) {
+          throw new PaymentStateConflictError(
+            "This refund would exceed the refundable amount.",
+          );
+        }
+
+        const now = new Date();
+        const refund = await tx.paymentRefund.create({
+          data: {
+            organizationId: input.organizationId,
+            invoiceId: payment.invoiceId,
+            paymentId: payment.id,
+            provider: input.provider,
+            amountMinor: input.amountMinor,
+            currency: payment.currency,
+            status: "PENDING",
+            reason: input.reason,
+          },
+        });
+
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { updatedAt: now },
+        });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: { updatedAt: now },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            input.organizationId,
+            invoice.id,
+            "PAYMENT_REFUND_REQUESTED",
+            `Requested a ${input.amountMinor} ${invoice.currency} minor-unit refund through ${input.provider}.`,
+            input.actor,
+          ),
+        });
+
+        return {
+          payment: await loadPaymentRecord(
+            tx,
+            payment.id,
+            invoice.number,
+            invoice.subscriptionId,
+          ),
+          invoice: mapInvoice(
+            await tx.invoice.findUniqueOrThrow({
+              where: { id: invoice.id },
+              include: invoiceInclude,
+            }),
+          ),
+          refund: mapRefund(refund),
+        };
+      });
+    },
+
+    async applyGatewayRefund(input: ApplyGatewayRefundInput) {
+      return prisma.$transaction(async (tx) => {
+        const refundRows = await tx.$queryRaw<Array<LockedRefund>>`
+          SELECT "id", "organizationId", "invoiceId", "paymentId", "provider",
+                 "providerRefundId", "amountMinor", "currency", "status",
+                 "reason", "processedAt", "failedAt"
+          FROM "payment_refunds"
+          WHERE "id" = ${input.refundId}
+            AND "organizationId" = ${input.organizationId}
+          FOR UPDATE
+        `;
+        const currentRefund = refundRows[0];
+
+        if (!currentRefund) {
+          throw new PaymentStateConflictError(
+            "That refund could not be found in this workspace.",
+          );
+        }
+
+        if (currentRefund.provider !== input.provider) {
+          throw new PaymentStateConflictError(
+            "This refund does not belong to the configured gateway.",
+          );
+        }
+
+        if (
+          input.providerRefundId &&
+          currentRefund.providerRefundId &&
+          input.providerRefundId !== currentRefund.providerRefundId
+        ) {
+          throw new PaymentStateConflictError(
+            "This refund is already linked to a different gateway refund.",
+          );
+        }
+
+        if (input.providerRefundId) {
+          const duplicate = await tx.paymentRefund.findFirst({
+            where: {
+              provider: input.provider,
+              providerRefundId: input.providerRefundId,
+              id: { not: currentRefund.id },
+            },
+            select: { id: true },
+          });
+
+          if (duplicate) {
+            throw new PaymentStateConflictError(
+              "That gateway refund is already linked to another payment.",
+            );
+          }
+        }
+
+        const payment = await lockPaymentRow(
+          tx,
+          input.organizationId,
+          currentRefund.paymentId,
+        );
+        const invoice = await lockInvoiceRow(
+          tx,
+          input.organizationId,
+          currentRefund.invoiceId,
+        );
+
+        if (!payment || !invoice) {
+          throw new PaymentStateConflictError(
+            "The payment for this refund could not be found.",
+          );
+        }
+
+        if (currentRefund.status === "SUCCEEDED") {
+          return {
+            payment: await loadPaymentRecord(
+              tx,
+              payment.id,
+              invoice.number,
+              invoice.subscriptionId,
+            ),
+            invoice: mapInvoice(
+              await tx.invoice.findUniqueOrThrow({
+                where: { id: invoice.id },
+                include: invoiceInclude,
+              }),
+            ),
+            refund: await loadRefundRecord(tx, currentRefund.id),
+          };
+        }
+
+        if (
+          currentRefund.status === "FAILED" &&
+          input.status !== "FAILED"
+        ) {
+          return {
+            payment: await loadPaymentRecord(
+              tx,
+              payment.id,
+              invoice.number,
+              invoice.subscriptionId,
+            ),
+            invoice: mapInvoice(
+              await tx.invoice.findUniqueOrThrow({
+                where: { id: invoice.id },
+                include: invoiceInclude,
+              }),
+            ),
+            refund: await loadRefundRecord(tx, currentRefund.id),
+          };
+        }
+
+        const now = new Date();
+
+        if (input.status === "PENDING") {
+          await tx.paymentRefund.update({
+            where: { id: currentRefund.id },
+            data: {
+              ...(input.providerRefundId
+                ? { providerRefundId: input.providerRefundId }
+                : {}),
+              updatedAt: now,
+            },
+          });
+
+          return {
+            payment: await loadPaymentRecord(
+              tx,
+              payment.id,
+              invoice.number,
+              invoice.subscriptionId,
+            ),
+            invoice: mapInvoice(
+              await tx.invoice.findUniqueOrThrow({
+                where: { id: invoice.id },
+                include: invoiceInclude,
+              }),
+            ),
+            refund: await loadRefundRecord(tx, currentRefund.id),
+          };
+        }
+
+        if (input.status === "FAILED") {
+          await tx.paymentRefund.update({
+            where: { id: currentRefund.id },
+            data: {
+              ...(input.providerRefundId
+                ? { providerRefundId: input.providerRefundId }
+                : {}),
+              status: "FAILED",
+              failedAt: now,
+            },
+          });
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { updatedAt: now },
+          });
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: { updatedAt: now },
+          });
+          await tx.invoiceActivity.create({
+            data: invoiceActivityData(
+              input.organizationId,
+              invoice.id,
+              "PAYMENT_REFUND_FAILED",
+              `A ${currentRefund.amountMinor} ${invoice.currency} minor-unit refund through ${currentRefund.provider} failed.`,
+              input.actor,
+            ),
+          });
+
+          return {
+            payment: await loadPaymentRecord(
+              tx,
+              payment.id,
+              invoice.number,
+              invoice.subscriptionId,
+            ),
+            invoice: mapInvoice(
+              await tx.invoice.findUniqueOrThrow({
+                where: { id: invoice.id },
+                include: invoiceInclude,
+              }),
+            ),
+            refund: await loadRefundRecord(tx, currentRefund.id),
+          };
+        }
+
+        if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+          throw new PaymentStateConflictError(
+            "The payment is not in a refundable state.",
+          );
+        }
+
+        if (currentRefund.currency !== payment.currency) {
+          throw new PaymentStateConflictError(
+            "The refund currency does not match the payment.",
+          );
+        }
+
+        if (
+          payment.refundedAmountMinor + currentRefund.amountMinor >
+          payment.amountMinor
+        ) {
+          throw new PaymentStateConflictError(
+            "This refund would exceed the captured amount.",
+          );
+        }
+
+        const refundedAmountMinor =
+          payment.refundedAmountMinor + currentRefund.amountMinor;
+        const fullyRefunded = refundedAmountMinor >= payment.amountMinor;
+        const amountPaidMinor = invoice.amountPaidMinor - currentRefund.amountMinor;
+
+        if (amountPaidMinor < 0) {
+          throw new PaymentStateConflictError(
+            "This refund would make the invoice balance negative.",
+          );
+        }
+
+        const next = invoiceStatusForBalance(
+          invoice.totalMinor,
+          amountPaidMinor,
+        );
+
+        await tx.paymentRefund.update({
+          where: { id: currentRefund.id },
+          data: {
+            ...(input.providerRefundId
+              ? { providerRefundId: input.providerRefundId }
+              : {}),
+            status: "SUCCEEDED" as PaymentRefundStatus,
+            processedAt: now,
+            failedAt: null,
+          },
+        });
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            refundedAmountMinor,
+            status: fullyRefunded ? "REFUNDED" : "SUCCEEDED",
+            refundedAt: fullyRefunded ? now : null,
+          },
+        });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            amountPaidMinor,
+            status: next.status,
+            paidAt: next.paidAt,
+          },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            input.organizationId,
+            invoice.id,
+            "PAYMENT_REFUNDED",
+            `Refunded ${currentRefund.amountMinor} ${invoice.currency} minor units through ${currentRefund.provider}.`,
+            input.actor,
+          ),
+        });
+
+        return {
+          payment: await loadPaymentRecord(
+            tx,
+            payment.id,
+            invoice.number,
+            invoice.subscriptionId,
+          ),
+          invoice: mapInvoice(
+            await tx.invoice.findUniqueOrThrow({
+              where: { id: invoice.id },
+              include: invoiceInclude,
+            }),
+          ),
+          refund: await loadRefundRecord(tx, currentRefund.id),
+        };
+      });
+    },
+
+    async processGatewayEvent(event: NormalizedGatewayWebhookEvent) {
+      if (event.kind === "unsupported") {
+        return {
+          outcome: "ignored",
+          organizationId: null,
+          paymentId: null,
+        } as const;
+      }
+
+      const actor: BillingActor = {
+        actorId: null,
+        actorName: `${event.provider} webhook`,
+      };
+
+      return prisma.$transaction(async (tx) => {
+        if (event.kind === "payment") {
+          const byInternal = event.internalPaymentId
+            ? await tx.$queryRaw<Array<LockedPayment>>`
+                SELECT "id", "organizationId", "status", "amountMinor", "currency",
+                       "invoiceId", "source", "refundedAmountMinor",
+                       "gatewayProvider", "gatewayOrderId", "gatewayPaymentId",
+                       "failedAt", "paidAt", "refundedAt", "updatedAt"
+                FROM "payments"
+                WHERE "id" = ${event.internalPaymentId}
+                  AND "source" = 'GATEWAY'
+                  AND "gatewayProvider" = ${event.provider}
+                FOR UPDATE
+              `
+            : [];
+          const byGateway =
+            byInternal.length === 0
+              ? await tx.$queryRaw<Array<LockedPayment>>`
+                  SELECT "id", "organizationId", "status", "amountMinor",
+                         "currency", "invoiceId", "source", "refundedAmountMinor",
+                         "gatewayProvider", "gatewayOrderId", "gatewayPaymentId",
+                         "failedAt", "paidAt", "refundedAt", "updatedAt"
+                  FROM "payments"
+                  WHERE "source" = 'GATEWAY'
+                    AND "gatewayProvider" = ${event.provider}
+                    AND (
+                      ("gatewayOrderId" IS NOT NULL
+                        AND "gatewayOrderId" = ${event.gatewayOrderId})
+                      OR "gatewayPaymentId" = ${event.gatewayPaymentId}
+                    )
+                  ORDER BY "createdAt" DESC
+                  LIMIT 1
+                  FOR UPDATE
+                `
+              : [];
+          const payment = byInternal[0] ?? byGateway[0] ?? null;
+
+          if (!payment) {
+            return {
+              outcome: "ignored",
+              organizationId: null,
+              paymentId: null,
+            } as const;
+          }
+
+          const invoice = await lockInvoiceRow(
+            tx,
+            payment.organizationId,
+            payment.invoiceId,
+          );
+
+          if (!invoice) {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          if (
+            payment.source !== "GATEWAY" ||
+            payment.gatewayProvider !== event.provider ||
+            (payment.gatewayOrderId &&
+              event.gatewayOrderId &&
+              payment.gatewayOrderId !== event.gatewayOrderId) ||
+            (payment.gatewayPaymentId &&
+              payment.gatewayPaymentId !== event.gatewayPaymentId) ||
+            event.amountMinor !== payment.amountMinor ||
+            event.currency !== payment.currency
+          ) {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          const now = new Date();
+
+          if (event.eventType === "payment.failed") {
+            if (
+              payment.status === "SUCCEEDED" ||
+              payment.status === "REFUNDED"
+            ) {
+              return {
+                outcome: "ignored",
+                organizationId: payment.organizationId,
+                paymentId: payment.id,
+              } as const;
+            }
+
+            if (payment.status === "FAILED") {
+              await tx.payment.update({
+                where: { id: payment.id },
+                data: { gatewayStatus: event.gatewayStatus },
+              });
+
+              return {
+                outcome: "ignored",
+                organizationId: payment.organizationId,
+                paymentId: payment.id,
+              } as const;
+            }
+
+            await tx.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: "FAILED",
+                gatewayPaymentId: event.gatewayPaymentId,
+                gatewayStatus: event.gatewayStatus,
+                failedAt: now,
+              },
+            });
+            await tx.invoice.update({
+              where: { id: invoice.id },
+              data: { updatedAt: now },
+            });
+            await tx.invoiceActivity.create({
+              data: invoiceActivityData(
+                payment.organizationId,
+                invoice.id,
+                "PAYMENT_FAILED",
+                `The ${event.provider} payment attempt failed. The invoice balance is unchanged.`,
+                actor,
+              ),
+            });
+
+            return {
+              outcome: "applied",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          if (
+            payment.status === "SUCCEEDED" ||
+            payment.status === "REFUNDED"
+          ) {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          if (invoice.status !== "OPEN") {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          if (
+            payment.amountMinor >
+            invoice.totalMinor - invoice.amountPaidMinor
+          ) {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          const amountPaidMinor =
+            invoice.amountPaidMinor + payment.amountMinor;
+          const next = invoiceStatusForBalance(
+            invoice.totalMinor,
+            amountPaidMinor,
+          );
+
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: "SUCCEEDED",
+              gatewayPaymentId: event.gatewayPaymentId,
+              gatewayStatus: event.gatewayStatus,
+              paidAt: now,
+              failedAt: null,
+            },
+          });
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: {
+              amountPaidMinor,
+              status: next.status,
+              paidAt: next.paidAt,
+            },
+          });
+          await tx.invoiceActivity.create({
+            data: invoiceActivityData(
+              payment.organizationId,
+              invoice.id,
+              "PAYMENT_SUCCEEDED",
+              `Confirmed a ${event.provider} payment of ${payment.amountMinor} ${invoice.currency} minor units from a verified webhook.`,
+              actor,
+            ),
+          });
+
+          return {
+            outcome: "applied",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        let refund: LockedRefund | null = null;
+
+        if (event.internalRefundId) {
+          const rows = await tx.$queryRaw<Array<LockedRefund>>`
+            SELECT "id", "organizationId", "invoiceId", "paymentId", "provider",
+                   "providerRefundId", "amountMinor", "currency", "status",
+                   "reason", "processedAt", "failedAt"
+            FROM "payment_refunds"
+            WHERE "id" = ${event.internalRefundId}
+            FOR UPDATE
+          `;
+          refund = rows[0] ?? null;
+
+          if (refund && refund.provider !== event.provider) {
+            refund = null;
+          }
+        }
+
+        if (!refund) {
+          const rows = await tx.$queryRaw<Array<LockedRefund>>`
+            SELECT "id", "organizationId", "invoiceId", "paymentId", "provider",
+                   "providerRefundId", "amountMinor", "currency", "status",
+                   "reason", "processedAt", "failedAt"
+            FROM "payment_refunds"
+            WHERE "provider" = ${event.provider}
+              AND "providerRefundId" = ${event.gatewayRefundId}
+            FOR UPDATE
+          `;
+          refund = rows[0] ?? null;
+        }
+
+        let payment: LockedPayment | null = null;
+
+        if (refund) {
+          payment = await lockPaymentRow(
+            tx,
+            refund.organizationId,
+            refund.paymentId,
+          );
+        } else {
+          const rows = await tx.$queryRaw<Array<LockedPayment>>`
+            SELECT "id", "organizationId", "status", "amountMinor", "currency",
+                   "invoiceId", "source", "refundedAmountMinor", "gatewayProvider",
+                   "gatewayOrderId", "gatewayPaymentId", "failedAt", "paidAt",
+                   "refundedAt", "updatedAt"
+            FROM "payments"
+            WHERE "source" = 'GATEWAY'
+              AND "gatewayProvider" = ${event.provider}
+              AND "gatewayPaymentId" = ${event.gatewayPaymentId}
+            ORDER BY "createdAt" DESC
+            LIMIT 1
+            FOR UPDATE
+          `;
+          payment = rows[0] ?? null;
+        }
+
+        if (!payment) {
+          return {
+            outcome: "ignored",
+            organizationId: null,
+            paymentId: null,
+          } as const;
+        }
+
+        const invoice = await lockInvoiceRow(
+          tx,
+          payment.organizationId,
+          payment.invoiceId,
+        );
+
+        if (!invoice) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (
+          payment.source !== "GATEWAY" ||
+          payment.gatewayProvider !== event.provider ||
+          (payment.gatewayPaymentId &&
+            payment.gatewayPaymentId !== event.gatewayPaymentId)
+        ) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (
+          refund &&
+          (refund.currency !== event.currency ||
+            refund.amountMinor !== event.amountMinor ||
+            refund.paymentId !== payment.id)
+        ) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        const now = new Date();
+
+        if (!refund) {
+          if (event.eventType === "refund.failed") {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          const pending = await tx.$queryRaw<Array<LockedRefund>>`
+            SELECT "id", "organizationId", "invoiceId", "paymentId", "provider",
+                   "providerRefundId", "amountMinor", "currency", "status",
+                   "reason", "processedAt", "failedAt"
+            FROM "payment_refunds"
+            WHERE "paymentId" = ${payment.id}
+              AND "status" = 'PENDING'
+              AND "amountMinor" = ${event.amountMinor}
+              AND "currency" = ${event.currency}
+              AND ("providerRefundId" IS NULL
+                OR "providerRefundId" = ${event.gatewayRefundId})
+            ORDER BY "createdAt" ASC
+            LIMIT 1
+            FOR UPDATE
+          `;
+          refund = pending[0] ?? null;
+
+          if (!refund) {
+            const pendingRows = await tx.$queryRaw<
+              Array<{ pending: bigint | number | string }>
+            >`
+              SELECT COALESCE(SUM("amountMinor"), 0)::bigint AS "pending"
+              FROM "payment_refunds"
+              WHERE "paymentId" = ${payment.id} AND "status" = 'PENDING'
+            `;
+            const pendingMinor = Number(pendingRows[0]?.pending ?? 0);
+            const availableMinor =
+              payment.amountMinor -
+              payment.refundedAmountMinor -
+              pendingMinor;
+
+            if (
+              (payment.status !== "SUCCEEDED" &&
+                payment.status !== "REFUNDED") ||
+              event.amountMinor <= 0 ||
+              event.amountMinor > availableMinor
+            ) {
+              return {
+                outcome: "ignored",
+                organizationId: payment.organizationId,
+                paymentId: payment.id,
+              } as const;
+            }
+
+            const created = await tx.paymentRefund.create({
+              data: {
+                organizationId: payment.organizationId,
+                invoiceId: payment.invoiceId,
+                paymentId: payment.id,
+                provider: event.provider,
+                providerRefundId: event.gatewayRefundId,
+                amountMinor: event.amountMinor,
+                currency: event.currency,
+                status: "PENDING",
+                reason: event.reason,
+              },
+            });
+
+            refund = {
+              id: created.id,
+              organizationId: created.organizationId,
+              invoiceId: created.invoiceId,
+              paymentId: created.paymentId,
+              provider: created.provider,
+              providerRefundId: created.providerRefundId,
+              amountMinor: created.amountMinor,
+              currency: created.currency,
+              status: created.status,
+              reason: created.reason,
+              processedAt: created.processedAt,
+              failedAt: created.failedAt,
+            };
+
+            await tx.payment.update({
+              where: { id: payment.id },
+              data: { updatedAt: now },
+            });
+            await tx.invoice.update({
+              where: { id: invoice.id },
+              data: { updatedAt: now },
+            });
+            await tx.invoiceActivity.create({
+              data: invoiceActivityData(
+                payment.organizationId,
+                invoice.id,
+                "PAYMENT_REFUND_REQUESTED",
+                `A ${event.amountMinor} ${invoice.currency} minor-unit refund was created through ${event.provider}.`,
+                actor,
+              ),
+            });
+          }
+        }
+
+        if (refund.providerRefundId === null) {
+          refund.providerRefundId = event.gatewayRefundId;
+          await tx.paymentRefund.update({
+            where: { id: refund.id },
+            data: { providerRefundId: event.gatewayRefundId },
+          });
+        } else if (refund.providerRefundId !== event.gatewayRefundId) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (event.eventType === "refund.created") {
+          if (refund.status !== "PENDING") {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          await tx.paymentRefund.update({
+            where: { id: refund.id },
+            data: {
+              ...(refund.reason ? {} : { reason: event.reason }),
+              updatedAt: now,
+            },
+          });
+
+          return {
+            outcome: "applied",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (event.eventType === "refund.failed") {
+          if (refund.status !== "PENDING") {
+            return {
+              outcome: "ignored",
+              organizationId: payment.organizationId,
+              paymentId: payment.id,
+            } as const;
+          }
+
+          await tx.paymentRefund.update({
+            where: { id: refund.id },
+            data: { status: "FAILED", failedAt: now },
+          });
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { updatedAt: now },
+          });
+          await tx.invoice.update({
+            where: { id: invoice.id },
+            data: { updatedAt: now },
+          });
+          await tx.invoiceActivity.create({
+            data: invoiceActivityData(
+              payment.organizationId,
+              invoice.id,
+              "PAYMENT_REFUND_FAILED",
+              `A ${refund.amountMinor} ${invoice.currency} minor-unit refund through ${event.provider} failed.`,
+              actor,
+            ),
+          });
+
+          return {
+            outcome: "applied",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (refund.status === "FAILED" || refund.status === "SUCCEEDED") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED") {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        if (
+          payment.refundedAmountMinor + refund.amountMinor >
+          payment.amountMinor
+        ) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        const refundedAmountMinor =
+          payment.refundedAmountMinor + refund.amountMinor;
+        const fullyRefunded = refundedAmountMinor >= payment.amountMinor;
+        const amountPaidMinor = invoice.amountPaidMinor - refund.amountMinor;
+
+        if (amountPaidMinor < 0) {
+          return {
+            outcome: "ignored",
+            organizationId: payment.organizationId,
+            paymentId: payment.id,
+          } as const;
+        }
+
+        const next = invoiceStatusForBalance(
+          invoice.totalMinor,
+          amountPaidMinor,
+        );
+
+        await tx.paymentRefund.update({
+          where: { id: refund.id },
+          data: {
+            status: "SUCCEEDED",
+            processedAt: now,
+            failedAt: null,
+          },
+        });
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            refundedAmountMinor,
+            status: fullyRefunded ? "REFUNDED" : "SUCCEEDED",
+            refundedAt: fullyRefunded ? now : null,
+          },
+        });
+        await tx.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            amountPaidMinor,
+            status: next.status,
+            paidAt: next.paidAt,
+          },
+        });
+        await tx.invoiceActivity.create({
+          data: invoiceActivityData(
+            payment.organizationId,
+            invoice.id,
+            "PAYMENT_REFUNDED",
+            `Refunded ${refund.amountMinor} ${invoice.currency} minor units through ${event.provider}.`,
+            actor,
+          ),
+        });
+
+        return {
+          outcome: "applied",
+          organizationId: payment.organizationId,
+          paymentId: payment.id,
+        } as const;
       });
     },
 

@@ -51,6 +51,8 @@ export const API_PATHS = {
     `/api/invoices/${encodeURIComponent(invoiceId)}/mark-uncollectible`,
   invoicePayments: (invoiceId: string) =>
     `/api/invoices/${encodeURIComponent(invoiceId)}/payments`,
+  invoiceCheckout: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}/checkout`,
   payment: (paymentId: string) =>
     `/api/payments/${encodeURIComponent(paymentId)}`,
   paymentSucceed: (paymentId: string) =>
@@ -59,6 +61,12 @@ export const API_PATHS = {
     `/api/payments/${encodeURIComponent(paymentId)}/fail`,
   paymentRefund: (paymentId: string) =>
     `/api/payments/${encodeURIComponent(paymentId)}/refund`,
+  paymentGatewayVerify: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/gateway/verify`,
+  paymentGatewayRefund: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/gateway/refund`,
+  gatewayConfig: "/api/gateway/config",
+  razorpayWebhook: "/api/webhooks/razorpay",
 } as const;
 
 /**
@@ -71,6 +79,7 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
+  | "BAD_GATEWAY"
   | "INTERNAL_ERROR"
   | "TOO_MANY_REQUESTS"
   | "SERVICE_UNAVAILABLE";

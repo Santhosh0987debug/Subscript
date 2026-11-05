@@ -104,7 +104,9 @@ export const invoiceActivityLabels: Record<InvoiceActivityType, string> = {
   PAYMENT_RECORDED: "Payment recorded",
   PAYMENT_SUCCEEDED: "Payment succeeded",
   PAYMENT_FAILED: "Payment failed",
+  PAYMENT_REFUND_REQUESTED: "Refund requested",
   PAYMENT_REFUNDED: "Payment refunded",
+  PAYMENT_REFUND_FAILED: "Refund failed",
 };
 
 const billingDateFormatter = new Intl.DateTimeFormat("en-US", {

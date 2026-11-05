@@ -4,11 +4,13 @@ import type {
   InvoiceLineItem,
   InvoiceSummary,
   Payment,
+  PaymentRefund,
 } from "@subscript/shared";
 import type {
   InvoiceActivityRecord,
   InvoiceRecord,
   PaymentRecord,
+  PaymentRefundRecord,
 } from "./types.js";
 
 function money(amountMinor: number, currency: string) {
@@ -67,6 +69,22 @@ export function toInvoiceActivity(
   };
 }
 
+export function toPaymentRefund(refund: PaymentRefundRecord): PaymentRefund {
+  return {
+    id: refund.id,
+    paymentId: refund.paymentId,
+    provider: refund.provider,
+    providerRefundId: refund.providerRefundId,
+    amount: money(refund.amountMinor, refund.currency),
+    status: refund.status,
+    reason: refund.reason,
+    processedAt: refund.processedAt?.toISOString() ?? null,
+    failedAt: refund.failedAt?.toISOString() ?? null,
+    createdAt: refund.createdAt.toISOString(),
+    updatedAt: refund.updatedAt.toISOString(),
+  };
+}
+
 export function toPayment(payment: PaymentRecord): Payment {
   return {
     id: payment.id,
@@ -80,6 +98,16 @@ export function toPayment(payment: PaymentRecord): Payment {
     source: payment.source,
     reference: payment.reference,
     note: payment.note,
+    gateway: payment.gatewayProvider
+      ? {
+          provider: payment.gatewayProvider,
+          orderId: payment.gatewayOrderId,
+          paymentId: payment.gatewayPaymentId,
+          status: payment.gatewayStatus,
+        }
+      : null,
+    refundedAmount: money(payment.refundedAmountMinor, payment.currency),
+    refunds: payment.refunds.map(toPaymentRefund),
     paidAt: payment.paidAt?.toISOString() ?? null,
     failedAt: payment.failedAt?.toISOString() ?? null,
     refundedAt: payment.refundedAt?.toISOString() ?? null,
