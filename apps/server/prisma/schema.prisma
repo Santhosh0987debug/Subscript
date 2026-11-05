@@ -44,6 +44,20 @@ enum SubscriptionStatus {
   PAST_DUE
   PAUSED
   CANCELED
+  EXPIRED
+}
+
+enum SubscriptionActivityType {
+  CREATED
+  TRIAL_STARTED
+  ACTIVATED
+  PAST_DUE
+  PAUSED
+  RESUMED
+  CANCEL_SCHEDULED
+  CANCELED
+  RENEWED
+  EXPIRED
 }
 
 enum InvoiceStatus {
@@ -52,6 +66,37 @@ enum InvoiceStatus {
   PAID
   VOID
   UNCOLLECTIBLE
+}
+
+enum InvoiceActivityType {
+  CREATED
+  ISSUED
+  VOIDED
+  MARKED_UNCOLLECTIBLE
+  PAYMENT_RECORDED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  PAYMENT_REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  CHECK
+  OTHER
+}
+
+enum PaymentSource {
+  MANUAL
+  GATEWAY
 }
 
 model User {
@@ -77,13 +122,18 @@ model Organization {
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
 
-  members             OrganizationMember[]
-  activeSessions      Session[]            @relation("ActiveOrganizationSessions")
-  customers           Customer[]
-  customerActivities  CustomerActivity[]
-  plans               Plan[]
-  subscriptions       Subscription[]
-  invoices            Invoice[]
+  members                OrganizationMember[]
+  activeSessions         Session[]             @relation("ActiveOrganizationSessions")
+  customers              Customer[]
+  customerActivities     CustomerActivity[]
+  plans                  Plan[]
+  subscriptions          Subscription[]
+  subscriptionActivities SubscriptionActivity[]
+  invoices               Invoice[]
+  invoiceLineItems       InvoiceLineItem[]
+  invoiceActivities      InvoiceActivity[]
+  payments               Payment[]
+  invoiceCounter         InvoiceCounter?
 
   @@map("organizations")
 }
@@ -199,48 +249,171 @@ model Subscription {
   customerId         String             @db.Uuid
   planId             String             @db.Uuid
   status             SubscriptionStatus @default(TRIALING)
-  quantity           Int                @default(1)
-  currentPeriodStart DateTime?          @db.Timestamptz(3)
-  currentPeriodEnd   DateTime?          @db.Timestamptz(3)
+  quantity           Int                @default(1) @db.Integer
+  startedAt          DateTime           @db.Timestamptz(3)
+  trialEndsAt        DateTime?          @db.Timestamptz(3)
+  currentPeriodStart DateTime           @db.Timestamptz(3)
+  currentPeriodEnd   DateTime           @db.Timestamptz(3)
   cancelAtPeriodEnd  Boolean            @default(false)
   canceledAt         DateTime?          @db.Timestamptz(3)
+  pausedAt           DateTime?          @db.Timestamptz(3)
+  endedAt            DateTime?          @db.Timestamptz(3)
+  planName           String             @db.VarChar(120)
+  planCode           String             @db.VarChar(60)
+  unitAmountMinor    Int                @db.Integer
+  currency           String             @db.VarChar(3)
+  interval           BillingInterval
+  trialDays          Int                @default(0) @db.Integer
   createdAt          DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  plan         Plan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer              @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  plan         Plan                  @relation(fields: [planId], references: [id], onDelete: Restrict)
   invoices     Invoice[]
+  activities   SubscriptionActivity[]
 
   @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@index([organizationId, currentPeriodEnd])
   @@index([customerId])
   @@index([planId])
   @@map("subscriptions")
 }
 
+model SubscriptionActivity {
+  id             String                    @id @default(uuid()) @db.Uuid
+  organizationId String                    @db.Uuid
+  subscriptionId String                    @db.Uuid
+  type           SubscriptionActivityType
+  message        String                    @db.VarChar(500)
+  actorId        String?                   @db.Uuid
+  actorName      String?                   @db.VarChar(160)
+  createdAt      DateTime                  @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, subscriptionId, createdAt])
+  @@map("subscription_activities")
+}
+
+model InvoiceCounter {
+  organizationId String @id @db.Uuid
+  nextNumber     Int    @default(1) @db.Integer
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_counters")
+}
+
 model Invoice {
+  id                  String        @id @default(uuid()) @db.Uuid
+  organizationId      String        @db.Uuid
+  customerId          String        @db.Uuid
+  subscriptionId      String?       @db.Uuid
+  number              String        @db.VarChar(60)
+  status              InvoiceStatus @default(DRAFT)
+  currency            String        @db.VarChar(3)
+  subtotalMinor       Int           @db.Integer
+  taxMinor            Int           @default(0) @db.Integer
+  totalMinor          Int           @db.Integer
+  amountPaidMinor     Int           @default(0) @db.Integer
+  taxRateBps          Int           @default(0) @db.Integer
+  dueInDays           Int           @default(7) @db.Integer
+  periodStart         DateTime?     @db.Timestamptz(3)
+  periodEnd           DateTime?     @db.Timestamptz(3)
+  customerName        String        @db.VarChar(160)
+  customerEmail       String        @db.VarChar(320)
+  customerCompany     String?       @db.VarChar(160)
+  billingAddressLine1 String?       @db.VarChar(160)
+  billingAddressLine2 String?       @db.VarChar(160)
+  billingCity         String?       @db.VarChar(100)
+  billingRegion       String?       @db.VarChar(100)
+  billingPostalCode   String?       @db.VarChar(40)
+  billingCountry      String?       @db.VarChar(80)
+  issuedAt            DateTime?     @db.Timestamptz(3)
+  dueAt               DateTime?     @db.Timestamptz(3)
+  paidAt              DateTime?     @db.Timestamptz(3)
+  voidedAt            DateTime?     @db.Timestamptz(3)
+  uncollectibleAt     DateTime?     @db.Timestamptz(3)
+  createdAt           DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime      @updatedAt @db.Timestamptz(3)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  subscription Subscription?       @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  lineItems    InvoiceLineItem[]
+  activities   InvoiceActivity[]
+  payments     Payment[]
+
+  @@unique([organizationId, number])
+  @@unique([subscriptionId, periodStart, periodEnd])
+  @@index([organizationId, status])
+  @@index([organizationId, customerId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, periodEnd])
+  @@index([customerId])
+  @@index([subscriptionId])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id               String @id @default(uuid()) @db.Uuid
+  organizationId   String @db.Uuid
+  invoiceId        String @db.Uuid
+  description      String @db.VarChar(300)
+  quantity         Int    @db.Integer
+  unitAmountMinor  Int    @db.Integer
+  totalMinor       Int    @db.Integer
+  position         Int    @default(0) @db.Integer
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, invoiceId])
+  @@map("invoice_line_items")
+}
+
+model InvoiceActivity {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  invoiceId      String              @db.Uuid
+  type           InvoiceActivityType
+  message        String              @db.VarChar(500)
+  actorId        String?             @db.Uuid
+  actorName      String?             @db.VarChar(160)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, invoiceId, createdAt])
+  @@map("invoice_activities")
+}
+
+model Payment {
   id             String        @id @default(uuid()) @db.Uuid
   organizationId String        @db.Uuid
-  customerId     String        @db.Uuid
-  subscriptionId String?       @db.Uuid
-  number         String        @db.VarChar(60)
-  status         InvoiceStatus @default(DRAFT)
-  subtotal       Decimal       @db.Decimal(12, 2)
-  tax            Decimal       @default(0) @db.Decimal(12, 2)
-  total          Decimal       @db.Decimal(12, 2)
-  currency       String        @default("USD") @db.VarChar(3)
-  issuedAt       DateTime      @default(now()) @db.Timestamptz(3)
-  dueAt          DateTime      @db.Timestamptz(3)
+  invoiceId      String        @db.Uuid
+  amountMinor    Int           @db.Integer
+  currency       String        @db.VarChar(3)
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  source         PaymentSource @default(MANUAL)
+  reference      String?       @db.VarChar(160)
+  note           String?       @db.VarChar(500)
   paidAt         DateTime?     @db.Timestamptz(3)
+  failedAt       DateTime?     @db.Timestamptz(3)
+  refundedAt     DateTime?     @db.Timestamptz(3)
   createdAt      DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
-  @@unique([organizationId, number])
+  @@index([organizationId, invoiceId, createdAt])
   @@index([organizationId, status])
-  @@index([customerId])
-  @@map("invoices")
+  @@index([invoiceId])
+  @@map("payments")
 }

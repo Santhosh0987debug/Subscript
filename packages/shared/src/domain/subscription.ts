@@ -16,8 +16,24 @@ export const SUBSCRIPTION_STATUSES = [
   "PAST_DUE",
   "PAUSED",
   "CANCELED",
+  "EXPIRED",
 ] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+
+export const SUBSCRIPTION_ACTIVITY_TYPES = [
+  "CREATED",
+  "TRIAL_STARTED",
+  "ACTIVATED",
+  "PAST_DUE",
+  "PAUSED",
+  "RESUMED",
+  "CANCEL_SCHEDULED",
+  "CANCELED",
+  "RENEWED",
+  "EXPIRED",
+] as const;
+export type SubscriptionActivityType =
+  (typeof SUBSCRIPTION_ACTIVITY_TYPES)[number];
 
 export const INVOICE_STATUSES = [
   "DRAFT",
@@ -27,6 +43,42 @@ export const INVOICE_STATUSES = [
   "UNCOLLECTIBLE",
 ] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+export const INVOICE_ACTIVITY_TYPES = [
+  "CREATED",
+  "ISSUED",
+  "VOIDED",
+  "MARKED_UNCOLLECTIBLE",
+  "PAYMENT_RECORDED",
+  "PAYMENT_SUCCEEDED",
+  "PAYMENT_FAILED",
+  "PAYMENT_REFUNDED",
+] as const;
+export type InvoiceActivityType = (typeof INVOICE_ACTIVITY_TYPES)[number];
+
+export const PAYMENT_STATUSES = [
+  "PENDING",
+  "SUCCEEDED",
+  "FAILED",
+  "REFUNDED",
+] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+export const PAYMENT_METHODS = [
+  "CASH",
+  "BANK_TRANSFER",
+  "CARD",
+  "CHECK",
+  "OTHER",
+] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/**
+ * Manual records are created by an operator inside Subscript. `GATEWAY` is
+ * reserved for a future provider integration and is never produced in Phase 4.
+ */
+export const PAYMENT_SOURCES = ["MANUAL", "GATEWAY"] as const;
+export type PaymentSource = (typeof PAYMENT_SOURCES)[number];
 
 export const CUSTOMER_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
 export type CustomerStatus = (typeof CUSTOMER_STATUSES)[number];
@@ -82,24 +134,115 @@ export interface PlanSummary {
   subscriptionCount: number;
 }
 
-export interface SubscriptionSummary {
+export interface Subscription {
   id: string;
   organizationId: string;
   customerId: string;
+  customerName: string;
+  customerEmail: string;
   planId: string;
+  planName: string;
+  planCode: string;
   status: SubscriptionStatus;
   quantity: number;
-  currentPeriodEnd: IsoDateString | null;
+  /** Unit price snapshotted when the subscription was created. */
+  price: Money;
+  interval: BillingInterval;
+  trialDays: number;
+  startedAt: IsoDateString;
+  trialEndsAt: IsoDateString | null;
+  currentPeriodStart: IsoDateString;
+  currentPeriodEnd: IsoDateString;
+  /** Trial end while trialing; otherwise the end of the current period. */
+  nextBillingDate: IsoDateString;
   cancelAtPeriodEnd: boolean;
+  canceledAt: IsoDateString | null;
+  pausedAt: IsoDateString | null;
+  endedAt: IsoDateString | null;
+  outstanding: Money;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+}
+
+/** Retained for API compatibility with the earlier placeholder contract. */
+export type SubscriptionSummary = Subscription;
+
+export interface SubscriptionActivity {
+  id: string;
+  type: SubscriptionActivityType;
+  message: string;
+  actorName: string | null;
+  createdAt: IsoDateString;
 }
 
 export interface InvoiceSummary {
   id: string;
   organizationId: string;
   customerId: string;
+  customerName: string;
+  subscriptionId: string | null;
   number: string;
   status: InvoiceStatus;
+  subtotal: Money;
+  tax: Money;
   total: Money;
-  dueAt: IsoDateString;
+  amountPaid: Money;
+  amountDue: Money;
+  taxRateBps: number;
+  periodStart: IsoDateString | null;
+  periodEnd: IsoDateString | null;
+  issuedAt: IsoDateString | null;
+  dueAt: IsoDateString | null;
   paidAt: IsoDateString | null;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+}
+
+export interface InvoiceLineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unitAmountMinor: number;
+  totalMinor: number;
+}
+
+export interface InvoiceActivity {
+  id: string;
+  type: InvoiceActivityType;
+  message: string;
+  actorName: string | null;
+  createdAt: IsoDateString;
+}
+
+export interface InvoiceCustomerSnapshot {
+  name: string;
+  email: string;
+  company: string;
+  billingAddress: BillingAddress;
+}
+
+export interface Payment {
+  id: string;
+  organizationId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  subscriptionId: string | null;
+  amount: Money;
+  method: PaymentMethod;
+  status: PaymentStatus;
+  source: PaymentSource;
+  reference: string | null;
+  note: string | null;
+  paidAt: IsoDateString | null;
+  failedAt: IsoDateString | null;
+  refundedAt: IsoDateString | null;
+  createdAt: IsoDateString;
+  updatedAt: IsoDateString;
+}
+
+export interface Invoice extends InvoiceSummary {
+  customer: InvoiceCustomerSnapshot;
+  lineItems: InvoiceLineItem[];
+  activities: InvoiceActivity[];
+  payments: Payment[];
 }

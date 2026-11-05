@@ -3,20 +3,33 @@ import type {
   ApiErrorCode,
   ApiErrorResponse,
   ApiFieldIssue,
+  CancelSubscriptionRequest,
   CreateCustomerRequest,
   CreatePlanRequest,
+  CreateSubscriptionRequest,
   CurrentOrganizationResponse,
   CustomerListParams,
   CustomerListResponse,
   CustomerMutationResponse,
   CustomerResponse,
+  GenerateInvoiceRequest,
+  GenerateInvoiceResponse,
   HealthResponse,
+  InvoiceListParams,
+  InvoiceListResponse,
+  InvoiceResponse,
   LoginRequest,
+  PaymentActionResponse,
   PlanListParams,
   PlanListResponse,
   PlanResponse,
+  RecordPaymentRequest,
   RegisterRequest,
   SessionResponse,
+  SubscriptionListParams,
+  SubscriptionListResponse,
+  SubscriptionMutationResponse,
+  SubscriptionResponse,
   UpdateCustomerRequest,
   UpdateOrganizationResponse,
   UpdatePlanRequest,
@@ -336,6 +349,197 @@ export async function restorePlan(planId: string): Promise<PlanResponse> {
 
 export async function deletePlan(planId: string): Promise<void> {
   await requestJson<void>(API_PATHS.plan(planId), { method: "DELETE" });
+}
+
+export async function listSubscriptions(
+  params: SubscriptionListParams = {},
+  signal?: AbortSignal,
+): Promise<SubscriptionListResponse> {
+  const query = buildQuery({
+    query: params.query?.trim(),
+    status: params.status,
+    sort: params.sort,
+    direction: params.direction,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<SubscriptionListResponse>(
+    `${API_PATHS.subscriptions}${query}`,
+    { signal },
+  );
+}
+
+export async function getSubscription(
+  subscriptionId: string,
+  signal?: AbortSignal,
+): Promise<SubscriptionResponse> {
+  return requestJson<SubscriptionResponse>(
+    API_PATHS.subscription(subscriptionId),
+    { signal },
+  );
+}
+
+export async function createSubscription(
+  input: CreateSubscriptionRequest,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(API_PATHS.subscriptions, {
+    method: "POST",
+    body: input,
+  });
+}
+
+export async function pauseSubscription(
+  subscriptionId: string,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionPause(subscriptionId),
+    { method: "POST" },
+  );
+}
+
+export async function resumeSubscription(
+  subscriptionId: string,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionResume(subscriptionId),
+    { method: "POST" },
+  );
+}
+
+export async function cancelSubscription(
+  subscriptionId: string,
+  input: CancelSubscriptionRequest = {},
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionCancel(subscriptionId),
+    { method: "POST", body: input },
+  );
+}
+
+export async function renewSubscription(
+  subscriptionId: string,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionRenew(subscriptionId),
+    { method: "POST" },
+  );
+}
+
+export async function expireSubscription(
+  subscriptionId: string,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionExpire(subscriptionId),
+    { method: "POST" },
+  );
+}
+
+export async function markSubscriptionPastDue(
+  subscriptionId: string,
+): Promise<SubscriptionMutationResponse> {
+  return requestJson<SubscriptionMutationResponse>(
+    API_PATHS.subscriptionMarkPastDue(subscriptionId),
+    { method: "POST" },
+  );
+}
+
+export async function generateSubscriptionInvoice(
+  subscriptionId: string,
+  input: GenerateInvoiceRequest,
+): Promise<GenerateInvoiceResponse> {
+  return requestJson<GenerateInvoiceResponse>(
+    API_PATHS.subscriptionInvoices(subscriptionId),
+    { method: "POST", body: input },
+  );
+}
+
+export async function listInvoices(
+  params: InvoiceListParams = {},
+  signal?: AbortSignal,
+): Promise<InvoiceListResponse> {
+  const query = buildQuery({
+    query: params.query?.trim(),
+    status: params.status,
+    subscriptionId: params.subscriptionId,
+    customerId: params.customerId,
+    sort: params.sort,
+    direction: params.direction,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<InvoiceListResponse>(`${API_PATHS.invoices}${query}`, {
+    signal,
+  });
+}
+
+export async function getInvoice(
+  invoiceId: string,
+  signal?: AbortSignal,
+): Promise<InvoiceResponse> {
+  return requestJson<InvoiceResponse>(API_PATHS.invoice(invoiceId), {
+    signal,
+  });
+}
+
+export async function issueInvoice(
+  invoiceId: string,
+): Promise<InvoiceResponse> {
+  return requestJson<InvoiceResponse>(API_PATHS.invoiceIssue(invoiceId), {
+    method: "POST",
+  });
+}
+
+export async function voidInvoice(
+  invoiceId: string,
+): Promise<InvoiceResponse> {
+  return requestJson<InvoiceResponse>(API_PATHS.invoiceVoid(invoiceId), {
+    method: "POST",
+  });
+}
+
+export async function markInvoiceUncollectible(
+  invoiceId: string,
+): Promise<InvoiceResponse> {
+  return requestJson<InvoiceResponse>(
+    API_PATHS.invoiceMarkUncollectible(invoiceId),
+    { method: "POST" },
+  );
+}
+
+export async function recordPayment(
+  invoiceId: string,
+  input: RecordPaymentRequest,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(
+    API_PATHS.invoicePayments(invoiceId),
+    { method: "POST", body: input },
+  );
+}
+
+export async function succeedPayment(
+  paymentId: string,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(API_PATHS.paymentSucceed(paymentId), {
+    method: "POST",
+  });
+}
+
+export async function failPayment(
+  paymentId: string,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(API_PATHS.paymentFail(paymentId), {
+    method: "POST",
+  });
+}
+
+export async function refundPayment(
+  paymentId: string,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(API_PATHS.paymentRefund(paymentId), {
+    method: "POST",
+  });
 }
 
 function isHealthResponse(value: unknown): value is HealthResponse {

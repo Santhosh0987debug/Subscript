@@ -7,7 +7,7 @@ interface TextFieldProps {
   value: string;
   onChange: (value: string) => void;
   name?: string;
-  type?: "text" | "email" | "password" | "tel";
+  type?: "text" | "email" | "password" | "tel" | "date";
   inputMode?: "text" | "decimal" | "numeric" | "tel";
   autoComplete?: string;
   placeholder?: string;

@@ -206,5 +206,15 @@ export function createMemoryPlanStore(): MemoryPlanStore {
 
       plan.subscriptionCount += 1;
     },
+
+    recordSubscription(organizationId, planId) {
+      const plan = findScoped(organizationId, planId);
+
+      if (!plan) {
+        throw new Error(`Memory store is missing plan ${planId}.`);
+      }
+
+      plan.subscriptionCount += 1;
+    },
   };
 }

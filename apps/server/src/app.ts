@@ -7,6 +7,8 @@ import type { AuthService } from "./auth/service.js";
 import { SESSION_COOKIE_NAME } from "./auth/session-token.js";
 import type { CustomerStore } from "./customers/types.js";
 import { createCustomersRouter } from "./customers/router.js";
+import type { InvoiceStore } from "./invoices/types.js";
+import { createInvoicesRouter } from "./invoices/router.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createAuthenticate } from "./middleware/authenticate.js";
 import { notFoundHandler } from "./middleware/not-found.js";
@@ -21,6 +23,8 @@ import { requireRole } from "./middleware/require-role.js";
 import { requestId } from "./middleware/request-id.js";
 import { createPlansRouter } from "./plans/router.js";
 import type { PlanStore } from "./plans/types.js";
+import type { SubscriptionStore } from "./subscriptions/types.js";
+import { createSubscriptionsRouter } from "./subscriptions/router.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createOrganizationsRouter } from "./routes/organizations.js";
 import { healthHandler } from "./routes/health.js";
@@ -36,6 +40,8 @@ export interface AppOptions {
   authService: AuthService;
   customerStore: CustomerStore;
   planStore: PlanStore;
+  subscriptionStore: SubscriptionStore;
+  invoiceStore: InvoiceStore;
   corsOrigins?: readonly string[];
   cookieName?: string;
   cookieSecure?: boolean;
@@ -122,6 +128,27 @@ export function createApp(options: AppOptions): Express {
   app.use(
     createPlansRouter({
       planStore: options.planStore,
+      authenticate,
+      requireOrganization,
+      requireAdmin: requireRole("OWNER", "ADMIN"),
+    }),
+  );
+
+  app.use(
+    createSubscriptionsRouter({
+      subscriptionStore: options.subscriptionStore,
+      invoiceStore: options.invoiceStore,
+      customerStore: options.customerStore,
+      planStore: options.planStore,
+      authenticate,
+      requireOrganization,
+      requireAdmin: requireRole("OWNER", "ADMIN"),
+    }),
+  );
+
+  app.use(
+    createInvoicesRouter({
+      invoiceStore: options.invoiceStore,
       authenticate,
       requireOrganization,
       requireAdmin: requireRole("OWNER", "ADMIN"),

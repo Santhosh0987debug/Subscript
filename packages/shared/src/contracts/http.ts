@@ -23,6 +23,42 @@ export const API_PATHS = {
     `/api/plans/${encodeURIComponent(planId)}/archive`,
   planRestore: (planId: string) =>
     `/api/plans/${encodeURIComponent(planId)}/restore`,
+  subscriptions: "/api/subscriptions",
+  subscription: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}`,
+  subscriptionPause: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/pause`,
+  subscriptionResume: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/resume`,
+  subscriptionCancel: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`,
+  subscriptionRenew: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/renew`,
+  subscriptionExpire: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/expire`,
+  subscriptionMarkPastDue: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/mark-past-due`,
+  subscriptionInvoices: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/invoices`,
+  invoices: "/api/invoices",
+  invoice: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}`,
+  invoiceIssue: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}/issue`,
+  invoiceVoid: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}/void`,
+  invoiceMarkUncollectible: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}/mark-uncollectible`,
+  invoicePayments: (invoiceId: string) =>
+    `/api/invoices/${encodeURIComponent(invoiceId)}/payments`,
+  payment: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}`,
+  paymentSucceed: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/succeed`,
+  paymentFail: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/fail`,
+  paymentRefund: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/refund`,
 } as const;
 
 /**

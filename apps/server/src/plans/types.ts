@@ -75,6 +75,15 @@ export interface PlanStore {
     organizationId: string,
     planId: string,
   ): Promise<number>;
+  /**
+   * Local-preview helper for stores that denormalize subscription counts.
+   * The PostgreSQL store derives the count from the subscriptions relation,
+   * so it does not implement this method.
+   */
+  recordSubscription?(
+    organizationId: string,
+    planId: string,
+  ): Promise<void> | void;
 }
 
 export class PlanCodeConflictError extends Error {

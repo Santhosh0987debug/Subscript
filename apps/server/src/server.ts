@@ -8,9 +8,13 @@ import { EnvValidationError, parseEnv } from "./config/env.js";
 import { createMemoryCustomerStore } from "./customers/store/memory.js";
 import { createPrismaCustomerStore } from "./customers/store/prisma.js";
 import { createPrismaClient } from "./db/prisma.js";
+import { createMemoryInvoiceStore } from "./invoices/store/memory.js";
+import { createPrismaInvoiceStore } from "./invoices/store/prisma.js";
 import { logger } from "./lib/logger.js";
 import { createMemoryPlanStore } from "./plans/store/memory.js";
 import { createPrismaPlanStore } from "./plans/store/prisma.js";
+import { createMemorySubscriptionStore } from "./subscriptions/store/memory.js";
+import { createPrismaSubscriptionStore } from "./subscriptions/store/prisma.js";
 
 function startServer(): void {
   let env;
@@ -45,6 +49,12 @@ function startServer(): void {
   const planStore = prisma
     ? createPrismaPlanStore(prisma)
     : createMemoryPlanStore();
+  const subscriptionStore = prisma
+    ? createPrismaSubscriptionStore(prisma)
+    : createMemorySubscriptionStore();
+  const invoiceStore = prisma
+    ? createPrismaInvoiceStore(prisma)
+    : createMemoryInvoiceStore();
 
   if (!prisma) {
     logger.warn(
@@ -62,6 +72,8 @@ function startServer(): void {
     authService,
     customerStore,
     planStore,
+    subscriptionStore,
+    invoiceStore,
     corsOrigins: env.corsOrigins,
     cookieSecure: env.cookieSecure,
     sessionTtlMs: env.sessionTtlMs,

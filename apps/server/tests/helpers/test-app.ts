@@ -13,6 +13,10 @@ import type { CustomerStore } from "../../src/customers/types.js";
 import type { RateLimitOptions } from "../../src/middleware/rate-limit.js";
 import type { MemoryPlanStore } from "../../src/plans/store/memory.js";
 import { createMemoryPlanStore } from "../../src/plans/store/memory.js";
+import { createMemorySubscriptionStore } from "../../src/subscriptions/store/memory.js";
+import type { SubscriptionStore } from "../../src/subscriptions/types.js";
+import { createMemoryInvoiceStore } from "../../src/invoices/store/memory.js";
+import type { InvoiceStore } from "../../src/invoices/types.js";
 
 export const TEST_ORIGIN = "http://localhost:5173";
 export const TEST_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -23,6 +27,8 @@ export interface TestApp {
   store: MemoryAuthStore;
   customerStore: CustomerStore;
   planStore: MemoryPlanStore;
+  subscriptionStore: SubscriptionStore;
+  invoiceStore: InvoiceStore;
   sessionTtlMs: number;
 }
 
@@ -36,6 +42,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
   const store = createMemoryAuthStore();
   const customerStore = createMemoryCustomerStore();
   const planStore = createMemoryPlanStore();
+  const subscriptionStore = createMemorySubscriptionStore();
+  const invoiceStore = createMemoryInvoiceStore();
   const sessionTtlMs = options.sessionTtlMs ?? TEST_SESSION_TTL_MS;
   const authService = createAuthService({
     store,
@@ -46,11 +54,22 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     authService,
     customerStore,
     planStore,
+    subscriptionStore,
+    invoiceStore,
     corsOrigins: [TEST_ORIGIN],
     cookieSecure: options.cookieSecure ?? false,
     sessionTtlMs,
     authRateLimit: options.authRateLimit ?? false,
   });
 
-  return { app, authService, store, customerStore, planStore, sessionTtlMs };
+  return {
+    app,
+    authService,
+    store,
+    customerStore,
+    planStore,
+    subscriptionStore,
+    invoiceStore,
+    sessionTtlMs,
+  };
 }
