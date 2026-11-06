@@ -6,6 +6,7 @@ import {
   Ban,
   CheckCircle2,
   CircleAlert,
+  CreditCard,
   FileText,
   Plus,
   Printer,
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  ShieldCheck,
   Wallet,
   XCircle,
 } from "lucide-react";
@@ -23,6 +25,7 @@ import {
   useParams,
 } from "react-router-dom";
 import type {
+  GatewayConfigResponse,
   Invoice,
   InvoiceActivityType,
   InvoiceResponse,
@@ -43,13 +46,18 @@ import { TextField } from "@/components/ui/TextField";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import {
   ApiClientError,
+  cancelGatewayCheckout,
   failPayment,
+  getGatewayConfig,
   getInvoice,
   issueInvoice,
   markInvoiceUncollectible,
   recordPayment,
+  refundGatewayPayment,
   refundPayment,
+  startInvoiceCheckout,
   succeedPayment,
+  verifyGatewayPayment,
   voidInvoice,
 } from "@/lib/api";
 import {
@@ -57,19 +65,24 @@ import {
   formatBillingDate,
   formatBillingPeriod,
   formatTaxRateBps,
+  getGatewayRefundableMinor,
   getInvoiceActionAvailability,
   getPaymentActionAvailability,
   invoiceActivityLabels,
   invoiceStatusLabels,
   invoiceStatusTones,
   paymentMethodLabels,
+  paymentRefundStatusLabels,
+  paymentRefundStatusTones,
   paymentSourceLabels,
   paymentStatusLabels,
   paymentStatusTones,
 } from "@/lib/billing";
 import {
+  validateGatewayRefundForm,
   validatePaymentForm,
   type BillingFormErrors,
+  type GatewayRefundFormValues,
   type PaymentFormValues,
 } from "@/lib/billing-validation";
 import { cn } from "@/lib/cn";
@@ -82,6 +95,10 @@ import {
   formatMajorAmount,
   formatMoney,
 } from "@/lib/money";
+import {
+  openRazorpayCheckout,
+  type RazorpayCheckoutSuccess,
+} from "@/lib/razorpay";
 
 type DetailState =
   | { status: "loading" }
@@ -121,9 +138,17 @@ const invoiceActivityStyles: Record<
   PAYMENT_RECORDED: { icon: Wallet, className: "bg-ink/[0.07] text-ink-soft" },
   PAYMENT_SUCCEEDED: { icon: CheckCircle2, className: "bg-lime text-ink" },
   PAYMENT_FAILED: { icon: XCircle, className: "bg-coral-soft text-coral" },
+  PAYMENT_REFUND_REQUESTED: {
+    icon: RotateCcw,
+    className: "bg-ink/[0.07] text-ink-soft",
+  },
   PAYMENT_REFUNDED: {
     icon: RotateCcw,
     className: "bg-[#e9d9bf] text-[#594831]",
+  },
+  PAYMENT_REFUND_FAILED: {
+    icon: CircleAlert,
+    className: "bg-coral-soft text-coral",
   },
 };
 
@@ -222,6 +247,23 @@ export default function InvoiceDetailPage() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [recordingPayment, setRecordingPayment] = useState(false);
   const [paymentFormOpen, setPaymentFormOpen] = useState(false);
+  const [gatewayConfig, setGatewayConfig] =
+    useState<GatewayConfigResponse | null>(null);
+  const [payingCheckout, setPayingCheckout] = useState(false);
+  const [cancelingCheckoutId, setCancelingCheckoutId] = useState<string | null>(
+    null,
+  );
+  const [gatewayRefundPayment, setGatewayRefundPayment] =
+    useState<Payment | null>(null);
+  const [gatewayRefundForm, setGatewayRefundForm] =
+    useState<GatewayRefundFormValues>({ amount: "", reason: "" });
+  const [gatewayRefundErrors, setGatewayRefundErrors] =
+    useState<BillingFormErrors>({});
+  const [gatewayRefundError, setGatewayRefundError] = useState<string | null>(
+    null,
+  );
+  const [submittingGatewayRefund, setSubmittingGatewayRefund] =
+    useState(false);
   const organizationId = activeOrganization?.id;
   const canManage =
     activeOrganization?.role === "OWNER" || activeOrganization?.role === "ADMIN";
@@ -273,6 +315,34 @@ export default function InvoiceDetailPage() {
       controller.abort();
     };
   }, [organizationId, invoiceId, reloadKey, refresh]);
+
+  useEffect(() => {
+    if (!organizationId) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    getGatewayConfig(controller.signal)
+      .then((config) => {
+        setGatewayConfig(config);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        if (isUnauthorizedError(error)) {
+          void refresh();
+        }
+
+        setGatewayConfig(null);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [organizationId, refresh]);
 
   function applyInvoice(next: Invoice): void {
     setState({ status: "ready", data: { invoice: next } });
@@ -440,6 +510,269 @@ export default function InvoiceDetailPage() {
     setPaymentError(null);
   }
 
+  async function refreshInvoiceFromServer(): Promise<Invoice | null> {
+    if (!invoiceId) {
+      return null;
+    }
+
+    try {
+      const data = await getInvoice(invoiceId);
+      applyInvoice(data.invoice);
+      return data.invoice;
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      return null;
+    }
+  }
+
+  async function completeGatewayPayment(
+    paymentId: string,
+    response: RazorpayCheckoutSuccess,
+  ): Promise<void> {
+    setActionError(null);
+
+    try {
+      const verified = await verifyGatewayPayment(paymentId, {
+        orderId: response.razorpay_order_id,
+        gatewayPaymentId: response.razorpay_payment_id,
+        signature: response.razorpay_signature,
+      });
+
+      applyInvoice(verified.invoice);
+      setNotice(
+        "Payment confirmed by Razorpay and applied to the invoice balance.",
+      );
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      setActionError(
+        getErrorMessage(
+          error,
+          "The payment could not be confirmed. No balance was changed. Refresh or check the payment history shortly.",
+        ),
+      );
+      await refreshInvoiceFromServer();
+    }
+  }
+
+  async function handleCheckoutDismissed(
+    paymentId: string,
+    orderId: string,
+  ): Promise<void> {
+    setCancelingCheckoutId(paymentId);
+
+    try {
+      const cancelled = await cancelGatewayCheckout(paymentId, orderId);
+      applyInvoice(cancelled.invoice);
+      const confirmed =
+        cancelled.payment.status === "SUCCEEDED" ||
+        cancelled.payment.status === "REFUNDED";
+      setNotice(
+        confirmed
+          ? "Razorpay already confirmed this payment, so it remains applied to the invoice."
+          : "Checkout closed without a confirmed payment. You can start a new attempt when ready.",
+      );
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      setActionError(
+        getErrorMessage(
+          error,
+          "Checkout closed. The pending attempt could not be released automatically; refresh shortly before trying again.",
+        ),
+      );
+      await refreshInvoiceFromServer();
+    } finally {
+      setCancelingCheckoutId(null);
+    }
+  }
+
+  async function handleGatewayCheckout(): Promise<void> {
+    if (!invoice || payingCheckout) {
+      return;
+    }
+
+    setPayingCheckout(true);
+    setActionError(null);
+    setNotice(null);
+
+    try {
+      const session = await startInvoiceCheckout(invoice.id);
+
+      await openRazorpayCheckout(session, {
+        onSuccess: (response) => {
+          void completeGatewayPayment(session.payment.id, response);
+        },
+        onDismiss: () => {
+          void handleCheckoutDismissed(session.payment.id, session.orderId);
+        },
+        onFailure: (message) => {
+          setActionError(message);
+          void refreshInvoiceFromServer();
+        },
+      });
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      setActionError(
+        getErrorMessage(
+          error,
+          "Checkout could not be opened. No payment was taken; try again.",
+        ),
+      );
+    } finally {
+      setPayingCheckout(false);
+    }
+  }
+
+  async function cancelPendingCheckout(payment: Payment): Promise<void> {
+    if (cancelingCheckoutId) {
+      return;
+    }
+
+    setActionError(null);
+    setNotice(null);
+    setCancelingCheckoutId(payment.id);
+
+    try {
+      const cancelled = await cancelGatewayCheckout(
+        payment.id,
+        payment.gateway?.orderId ?? null,
+      );
+      applyInvoice(cancelled.invoice);
+      setNotice(
+        "Pending checkout cancelled. You can start a new payment attempt.",
+      );
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      setActionError(
+        getErrorMessage(
+          error,
+          "The pending checkout could not be cancelled. Refresh shortly and try again.",
+        ),
+      );
+      await refreshInvoiceFromServer();
+    } finally {
+      setCancelingCheckoutId(null);
+    }
+  }
+
+  function openGatewayRefundForm(payment: Payment): void {
+    const refundableMinor = getGatewayRefundableMinor(payment);
+
+    setGatewayRefundPayment(payment);
+    setGatewayRefundForm({
+      amount: formatMajorAmount(refundableMinor, payment.amount.currency),
+      reason: "",
+    });
+    setGatewayRefundErrors({});
+    setGatewayRefundError(null);
+    setActionError(null);
+    setNotice(null);
+  }
+
+  function closeGatewayRefundForm(): void {
+    if (submittingGatewayRefund) {
+      return;
+    }
+
+    setGatewayRefundPayment(null);
+    setGatewayRefundForm({ amount: "", reason: "" });
+    setGatewayRefundErrors({});
+    setGatewayRefundError(null);
+  }
+
+  function updateGatewayRefundField<K extends keyof GatewayRefundFormValues>(
+    key: K,
+    value: GatewayRefundFormValues[K],
+  ): void {
+    setGatewayRefundForm((current) => ({ ...current, [key]: value }));
+    setGatewayRefundErrors((current) => {
+      if (!(key in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setGatewayRefundError(null);
+  }
+
+  async function submitGatewayRefund(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (!gatewayRefundPayment || submittingGatewayRefund) {
+      return;
+    }
+
+    const refundableMinor = getGatewayRefundableMinor(gatewayRefundPayment);
+    const validation = validateGatewayRefundForm(gatewayRefundForm, {
+      refundableMinor,
+      currency: gatewayRefundPayment.amount.currency,
+    });
+
+    if (
+      Object.keys(validation.errors).length > 0 ||
+      validation.amountMinor === null
+    ) {
+      setGatewayRefundErrors(validation.errors);
+      setGatewayRefundError("Review the highlighted fields before refunding.");
+      return;
+    }
+
+    setSubmittingGatewayRefund(true);
+    setGatewayRefundErrors({});
+    setGatewayRefundError(null);
+    setActionError(null);
+
+    try {
+      const reason = gatewayRefundForm.reason.trim();
+      const response = await refundGatewayPayment(gatewayRefundPayment.id, {
+        amountMinor: validation.amountMinor,
+        reason: reason.length > 0 ? reason : null,
+      });
+
+      applyInvoice(response.invoice);
+      setGatewayRefundPayment(null);
+      setGatewayRefundForm({ amount: "", reason: "" });
+      setNotice(
+        response.refund.status === "PENDING"
+          ? "Refund submitted to Razorpay. The invoice will update after the provider confirms it."
+          : response.refund.status === "SUCCEEDED"
+            ? "Refund processed by Razorpay and applied to the invoice balance."
+            : "Razorpay rejected the refund. The invoice balance is unchanged.",
+      );
+    } catch (error) {
+      if (isUnauthorizedError(error)) {
+        void refresh();
+      }
+
+      setGatewayRefundError(
+        getErrorMessage(
+          error,
+          "The gateway refund could not be started. The payment balance is unchanged.",
+        ),
+      );
+    } finally {
+      setSubmittingGatewayRefund(false);
+    }
+  }
+
   if (state.status === "loading") {
     return <DetailSkeleton />;
   }
@@ -496,6 +829,13 @@ export default function InvoiceDetailPage() {
     invoiceActions.issue || invoiceActions.void || invoiceActions.markUncollectible;
   const canRecordPayment =
     canManage && record.status === "OPEN" && record.amountDue.amountMinor > 0;
+  const pendingGatewayPayment =
+    record.payments.find(
+      (payment) =>
+        payment.source === "GATEWAY" && payment.status === "PENDING",
+    ) ?? null;
+  const onlineCheckoutAvailable =
+    canManage && record.status === "OPEN" && record.amountDue.amountMinor > 0;
   const addressLines = [
     record.customer.billingAddress.line1,
     record.customer.billingAddress.line2,
@@ -528,7 +868,7 @@ export default function InvoiceDetailPage() {
           description={`${record.customer.name} · ${formatBillingPeriod(
             record.periodStart,
             record.periodEnd,
-          )}. This is an internal billing record; payments are recorded manually.`}
+          )}. Manual payments and verified Razorpay checkout attempts are both recorded here.`}
           actions={
             <>
               <Badge
@@ -655,6 +995,98 @@ export default function InvoiceDetailPage() {
                 </div>
               ) : null}
             </dl>
+
+            {onlineCheckoutAvailable ? (
+              <div className="mt-6 border-t border-line pt-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="eyebrow">Online checkout</p>
+                  {gatewayConfig?.enabled ? (
+                    <Badge tone={gatewayConfig.testMode ? "outline" : "lime"}>
+                      {gatewayConfig.testMode
+                        ? "Razorpay test mode"
+                        : "Razorpay live"}
+                    </Badge>
+                  ) : null}
+                </div>
+
+                {gatewayConfig === null ? (
+                  <p className="mt-3 text-[10.5px] leading-4 text-muted">
+                    Checking gateway availability...
+                  </p>
+                ) : !gatewayConfig.enabled ? (
+                  <Alert tone="info" className="mt-3">
+                    Online checkout is not configured. Add{" "}
+                    <span className="font-mono text-[10px]">
+                      RAZORPAY_KEY_ID
+                    </span>
+                    ,{" "}
+                    <span className="font-mono text-[10px]">
+                      RAZORPAY_KEY_SECRET
+                    </span>
+                    , and{" "}
+                    <span className="font-mono text-[10px]">
+                      RAZORPAY_WEBHOOK_SECRET
+                    </span>{" "}
+                    to the API environment to accept card payments.
+                  </Alert>
+                ) : pendingGatewayPayment ? (
+                  <div className="mt-3 rounded-xl border border-line bg-surface-raised/70 p-3.5">
+                    <p className="text-[11px] font-semibold text-ink">
+                      A checkout attempt is still pending.
+                    </p>
+                    <p className="mt-1 text-[10.5px] leading-4 text-muted">
+                      If you closed the Razorpay window, cancel the attempt
+                      before starting another. A verified webhook can still
+                      complete it.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-3"
+                      disabled={cancelingCheckoutId !== null}
+                      onClick={() =>
+                        void cancelPendingCheckout(pendingGatewayPayment)
+                      }
+                    >
+                      {cancelingCheckoutId === pendingGatewayPayment.id
+                        ? "Cancelling..."
+                        : "Cancel pending attempt"}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <Button
+                      size="sm"
+                      disabled={payingCheckout}
+                      onClick={() => void handleGatewayCheckout()}
+                    >
+                      <CreditCard
+                        aria-hidden="true"
+                        className="h-3.5 w-3.5"
+                        strokeWidth={2}
+                      />
+                      {payingCheckout ? "Opening checkout..." : "Pay now"}
+                    </Button>
+                    <span className="inline-flex items-center gap-1.5 text-[10px] text-muted">
+                      <ShieldCheck
+                        aria-hidden="true"
+                        className="h-3.5 w-3.5 text-ink-soft"
+                        strokeWidth={1.9}
+                      />
+                      Verified server-side before the balance changes
+                    </span>
+                  </div>
+                )}
+
+                {gatewayConfig?.enabled ? (
+                  <p className="mt-3 text-[10px] leading-4 text-muted">
+                    Razorpay Checkout opens securely. Subscript confirms the
+                    order, amount, currency, and signature before applying the
+                    payment.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </Card>
 
@@ -905,7 +1337,7 @@ export default function InvoiceDetailPage() {
             <div>
               <p className="eyebrow">Payment history</p>
               <h2 className="mt-2 font-display text-2xl leading-tight tracking-[-0.02em] text-ink">
-                Manual records and attempts.
+                Manual records and gateway attempts.
               </h2>
             </div>
             {canRecordPayment && !paymentFormOpen ? (
@@ -921,8 +1353,8 @@ export default function InvoiceDetailPage() {
           </div>
 
           <p className="mt-2 text-[10.5px] leading-4 text-muted">
-            Internal records only. Subscript does not confirm funds with a payment
-            gateway in this phase.
+            Manual entries are internal records. Razorpay attempts update the
+            balance only after a verified checkout signature or webhook.
           </p>
 
           {paymentFormOpen && canRecordPayment ? (
@@ -1112,6 +1544,10 @@ export default function InvoiceDetailPage() {
                 const paymentActions = getPaymentActionAvailability(
                   payment.status,
                 );
+                const isManual = payment.source === "MANUAL";
+                const refundableMinor = getGatewayRefundableMinor(payment);
+                const refundFormOpen =
+                  gatewayRefundPayment?.id === payment.id;
 
                 return (
                   <li key={payment.id} className="py-4 first:pt-0 last:pb-0">
@@ -1127,6 +1563,10 @@ export default function InvoiceDetailPage() {
                           <Badge tone={paymentStatusTones[payment.status]}>
                             {paymentStatusLabels[payment.status]}
                           </Badge>
+                          {payment.status === "SUCCEEDED" &&
+                          payment.refundedAmount.amountMinor > 0 ? (
+                            <Badge tone="outline">Partially refunded</Badge>
+                          ) : null}
                         </div>
                         <p className="mt-1 font-mono text-[8.5px] uppercase tracking-[0.08em] text-muted">
                           {paymentMethodLabels[payment.method]} ·{" "}
@@ -1148,11 +1588,68 @@ export default function InvoiceDetailPage() {
                             {payment.note}
                           </p>
                         ) : null}
+                        {payment.gateway ? (
+                          <p className="mt-1 font-mono text-[8.5px] leading-4 tracking-[0.04em] text-muted">
+                            {payment.gateway.provider} order{" "}
+                            {payment.gateway.orderId ?? "pending"} · payment{" "}
+                            {payment.gateway.paymentId ?? "pending"}
+                            {payment.gateway.status
+                              ? ` · ${payment.gateway.status}`
+                              : ""}
+                          </p>
+                        ) : null}
+                        {!isManual && payment.status === "PENDING" ? (
+                          <p className="mt-1 text-[10px] leading-4 text-muted">
+                            Waiting for Razorpay confirmation. Pending attempts
+                            do not affect the invoice balance.
+                          </p>
+                        ) : null}
+
+                        {payment.refunds.length > 0 ? (
+                          <ul className="mt-2.5 space-y-2 border-t border-line pt-2.5">
+                            {payment.refunds.map((refund) => (
+                              <li
+                                key={refund.id}
+                                className="flex flex-wrap items-start justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[10.5px] font-semibold text-ink">
+                                    {formatMoney(
+                                      refund.amount.amountMinor,
+                                      refund.amount.currency,
+                                    )}{" "}
+                                    refund
+                                  </p>
+                                  {refund.reason ? (
+                                    <p className="mt-0.5 text-[10px] leading-4 text-muted">
+                                      {refund.reason}
+                                    </p>
+                                  ) : null}
+                                  <p className="mt-0.5 font-mono text-[8px] tracking-[0.04em] text-muted">
+                                    {refund.providerRefundId ??
+                                      "Awaiting provider id"}{" "}
+                                    ·{" "}
+                                    {formatBillingDate(
+                                      refund.processedAt ??
+                                        refund.failedAt ??
+                                        refund.createdAt,
+                                    )}
+                                  </p>
+                                </div>
+                                <Badge
+                                  tone={paymentRefundStatusTones[refund.status]}
+                                >
+                                  {paymentRefundStatusLabels[refund.status]}
+                                </Badge>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </div>
 
                       {canManage ? (
                         <div className="flex flex-wrap gap-1.5">
-                          {paymentActions.succeed ? (
+                          {isManual && paymentActions.succeed ? (
                             <Button
                               variant="secondary"
                               size="sm"
@@ -1166,7 +1663,7 @@ export default function InvoiceDetailPage() {
                               Succeed
                             </Button>
                           ) : null}
-                          {paymentActions.fail ? (
+                          {isManual && paymentActions.fail ? (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1178,7 +1675,7 @@ export default function InvoiceDetailPage() {
                               Fail
                             </Button>
                           ) : null}
-                          {paymentActions.refund ? (
+                          {isManual && paymentActions.refund ? (
                             <Button
                               variant="secondary"
                               size="sm"
@@ -1189,9 +1686,105 @@ export default function InvoiceDetailPage() {
                               Refund
                             </Button>
                           ) : null}
+                          {!isManual &&
+                          refundableMinor > 0 &&
+                          !refundFormOpen ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => openGatewayRefundForm(payment)}
+                            >
+                              Refund via {payment.gateway?.provider ?? "gateway"}
+                            </Button>
+                          ) : null}
+                          {!isManual && payment.status === "PENDING" ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={cancelingCheckoutId !== null}
+                              onClick={() => void cancelPendingCheckout(payment)}
+                            >
+                              {cancelingCheckoutId === payment.id
+                                ? "Cancelling..."
+                                : "Cancel checkout"}
+                            </Button>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
+
+                    {refundFormOpen ? (
+                      <form
+                        onSubmit={(event) => void submitGatewayRefund(event)}
+                        noValidate
+                        className="mt-3 rounded-xl border border-line bg-surface-raised/70 p-3.5"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold text-ink">
+                            Refund through{" "}
+                            {payment.gateway?.provider ?? "the gateway"}
+                          </p>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={submittingGatewayRefund}
+                            onClick={closeGatewayRefundForm}
+                          >
+                            Close
+                          </Button>
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <TextField
+                            label={`Amount (${payment.amount.currency})`}
+                            value={gatewayRefundForm.amount}
+                            onChange={(value) =>
+                              updateGatewayRefundField("amount", value)
+                            }
+                            inputMode="decimal"
+                            error={gatewayRefundErrors.amount}
+                            hint={`Refundable ${formatMoney(
+                              refundableMinor,
+                              payment.amount.currency,
+                            )}.`}
+                            required
+                          />
+                          <TextField
+                            label="Reason (optional)"
+                            value={gatewayRefundForm.reason}
+                            onChange={(value) =>
+                              updateGatewayRefundField("reason", value)
+                            }
+                            error={gatewayRefundErrors.reason}
+                            maxLength={500}
+                          />
+                        </div>
+                        {gatewayRefundError ? (
+                          <Alert tone="error" className="mt-3">
+                            {gatewayRefundError}
+                          </Alert>
+                        ) : null}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            type="submit"
+                            size="sm"
+                            disabled={submittingGatewayRefund}
+                            className="border-coral bg-coral text-white hover:bg-coral/90"
+                          >
+                            {submittingGatewayRefund
+                              ? "Submitting..."
+                              : "Submit refund"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={submittingGatewayRefund}
+                            onClick={closeGatewayRefundForm}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </form>
+                    ) : null}
                   </li>
                 );
               })}

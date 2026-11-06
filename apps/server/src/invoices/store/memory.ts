@@ -853,7 +853,8 @@ export function createMemoryInvoiceStore(): InvoiceStore {
 
       if (
         payment.gatewayPaymentId &&
-        payment.gatewayPaymentId !== input.gatewayPaymentId
+        payment.gatewayPaymentId !== input.gatewayPaymentId &&
+        payment.status !== "FAILED"
       ) {
         throw new PaymentStateConflictError(
           "This payment attempt is already linked to a different gateway payment.",
@@ -1149,7 +1150,8 @@ export function createMemoryInvoiceStore(): InvoiceStore {
             event.gatewayOrderId &&
             payment.gatewayOrderId !== event.gatewayOrderId) ||
           (payment.gatewayPaymentId &&
-            payment.gatewayPaymentId !== event.gatewayPaymentId) ||
+            payment.gatewayPaymentId !== event.gatewayPaymentId &&
+            payment.status !== "FAILED") ||
           event.amountMinor !== payment.amountMinor ||
           event.currency !== payment.currency
         ) {
@@ -1277,7 +1279,7 @@ export function createMemoryInvoiceStore(): InvoiceStore {
         refund = null;
       }
 
-      let payment = refund
+      const payment = refund
         ? payments.get(refund.paymentId) ?? null
         : findPaymentByGateway({
             provider: event.provider,

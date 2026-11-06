@@ -141,6 +141,12 @@ export interface GatewayService {
       signature: string;
     },
   ): Promise<PaymentMutationResult>;
+  cancelCheckout(
+    input: GatewayActorContext & {
+      paymentId: string;
+      orderId: string | null;
+    },
+  ): Promise<PaymentRecord>;
   refund(
     input: GatewayActorContext & {
       paymentId: string;
@@ -340,6 +346,53 @@ export function createGatewayService(
       });
     },
 
+    async cancelCheckout(input) {
+      const gateway = requireGateway(options.gateway);
+      const payment = await options.invoiceStore.findPaymentById(
+        input.organizationId,
+        input.paymentId,
+      );
+
+      if (!payment) {
+        throw new PaymentStateConflictError(
+          "That payment could not be found in this workspace.",
+        );
+      }
+
+      if (
+        payment.source !== "GATEWAY" ||
+        payment.gatewayProvider !== gateway.provider
+      ) {
+        throw new PaymentStateConflictError(
+          "This payment does not belong to the configured gateway.",
+        );
+      }
+
+      if (
+        payment.gatewayOrderId &&
+        input.orderId &&
+        payment.gatewayOrderId !== input.orderId
+      ) {
+        throw new PaymentStateConflictError(
+          "This checkout does not match the reserved payment attempt.",
+        );
+      }
+
+      if (payment.status !== "PENDING") {
+        return payment;
+      }
+
+      return options.invoiceStore.failGatewayPayment({
+        organizationId: input.organizationId,
+        paymentId: payment.id,
+        provider: gateway.provider,
+        gatewayStatus: "cancelled",
+        message:
+          "Checkout was closed before payment was confirmed. No balance was changed; start checkout again when ready.",
+        actor: input.actor,
+      });
+    },
+
     async refund(input) {
       const gateway = requireGateway(options.gateway);
       const payment = await options.invoiceStore.findPaymentById(
@@ -401,17 +454,28 @@ export function createGatewayService(
           currency: payment.currency,
         });
       } catch (error) {
+        const uncertain =
+          !(error instanceof GatewayRequestError) ||
+          error.providerStatus === null ||
+          error.providerStatus >= 500;
+
         await options.invoiceStore
           .applyGatewayRefund({
             organizationId: input.organizationId,
             refundId: reservation.refund.id,
             provider: gateway.provider,
             providerRefundId: null,
-            gatewayStatus: "request_failed",
-            status: "FAILED",
+            gatewayStatus: uncertain ? "request_uncertain" : "request_failed",
+            status: uncertain ? "PENDING" : "FAILED",
             actor: input.actor,
           })
           .catch(() => undefined);
+
+        if (uncertain) {
+          throw new GatewayRequestError(
+            "The refund request could not be confirmed. The amount remains reserved and pending; refresh the invoice before trying again.",
+          );
+        }
 
         if (error instanceof GatewayRequestError) {
           throw error;

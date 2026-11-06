@@ -1,6 +1,8 @@
 import type {
   InvoiceStatus,
+  Payment,
   PaymentMethod,
+  PaymentRefundStatus,
   PaymentSource,
   PaymentStatus,
   SubscriptionActivityType,
@@ -65,6 +67,21 @@ export const paymentStatusTones: Record<PaymentStatus, BillingBadgeTone> = {
   SUCCEEDED: "lime",
   FAILED: "coral",
   REFUNDED: "outline",
+};
+
+export const paymentRefundStatusLabels: Record<PaymentRefundStatus, string> = {
+  PENDING: "Refund pending",
+  SUCCEEDED: "Refunded",
+  FAILED: "Refund failed",
+};
+
+export const paymentRefundStatusTones: Record<
+  PaymentRefundStatus,
+  BillingBadgeTone
+> = {
+  PENDING: "neutral",
+  SUCCEEDED: "lime",
+  FAILED: "coral",
 };
 
 export const paymentMethodLabels: Record<PaymentMethod, string> = {
@@ -278,4 +295,28 @@ export function getPaymentActionAvailability(
     fail: status === "PENDING",
     refund: status === "SUCCEEDED",
   };
+}
+
+/**
+ * Remaining amount a gateway payment can refund, excluding refunds that are
+ * still pending confirmation from the provider.
+ */
+export function getGatewayRefundableMinor(payment: Payment): number {
+  if (
+    payment.source !== "GATEWAY" ||
+    (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDED")
+  ) {
+    return 0;
+  }
+
+  const pendingMinor = payment.refunds
+    .filter((refund) => refund.status === "PENDING")
+    .reduce((total, refund) => total + refund.amount.amountMinor, 0);
+
+  return Math.max(
+    payment.amount.amountMinor -
+      payment.refundedAmount.amountMinor -
+      pendingMinor,
+    0,
+  );
 }

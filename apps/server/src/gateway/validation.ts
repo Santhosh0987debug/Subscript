@@ -18,6 +18,12 @@ export const verifyGatewayPaymentSchema = z
   })
   .strict();
 
+export const cancelGatewayCheckoutSchema = z
+  .object({
+    orderId: z.string().trim().min(1).max(160).optional(),
+  })
+  .strict();
+
 export const gatewayRefundSchema = z
   .object({
     amountMinor: z

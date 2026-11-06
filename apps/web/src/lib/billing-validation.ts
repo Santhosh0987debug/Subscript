@@ -146,6 +146,43 @@ export function validatePaymentForm(
   return { errors, amountMinor };
 }
 
+export interface GatewayRefundFormValues {
+  amount: string;
+  reason: string;
+}
+
+export interface GatewayRefundValidationResult {
+  errors: BillingFormErrors;
+  amountMinor: number | null;
+}
+
+export function validateGatewayRefundForm(
+  values: GatewayRefundFormValues,
+  options: { refundableMinor: number; currency: string },
+): GatewayRefundValidationResult {
+  const errors: BillingFormErrors = {};
+  const amountMinor = parseMajorAmount(values.amount, options.currency);
+
+  if (values.amount.trim().length === 0) {
+    errors.amount = "Enter a refund amount.";
+  } else if (amountMinor === null) {
+    errors.amount = `Enter a valid ${options.currency} amount.`;
+  } else if (amountMinor <= 0) {
+    errors.amount = "Enter an amount greater than zero.";
+  } else if (amountMinor > options.refundableMinor) {
+    errors.amount = `Refund cannot exceed the ${formatMoney(
+      options.refundableMinor,
+      options.currency,
+    )} refundable balance.`;
+  }
+
+  if (values.reason.trim().length > 500) {
+    errors.reason = "Reason must be 500 characters or fewer.";
+  }
+
+  return { errors, amountMinor };
+}
+
 export interface GenerateInvoiceFormValues {
   taxRate: string;
   dueInDays: string;

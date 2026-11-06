@@ -40,6 +40,8 @@ export interface TestApp {
 
 export interface TestAppOptions {
   authRateLimit?: RateLimitOptions | false;
+  gatewayRateLimit?: RateLimitOptions | false;
+  webhookRateLimit?: RateLimitOptions | false;
   cookieSecure?: boolean;
   sessionTtlMs?: number;
   gateway?: PaymentGateway | null;
@@ -72,8 +74,8 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     cookieSecure: options.cookieSecure ?? false,
     sessionTtlMs,
     authRateLimit: options.authRateLimit ?? false,
-    gatewayRateLimit: false,
-    webhookRateLimit: false,
+    gatewayRateLimit: options.gatewayRateLimit ?? false,
+    webhookRateLimit: options.webhookRateLimit ?? false,
   });
 
   return {

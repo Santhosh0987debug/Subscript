@@ -102,6 +102,84 @@ describe("parseEnv", () => {
     expect(env.corsOrigins).toEqual(["https://app.subscript.dev"]);
     expect(env.cookieSecure).toBe(true);
   });
+
+  it("leaves Razorpay disabled when no credentials are present", () => {
+    expect(parseEnv({}).razorpay).toBeNull();
+  });
+
+  it("requires all Razorpay values together", () => {
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "rzp_test_abc123",
+      }),
+    ).toThrow(EnvValidationError);
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "rzp_test_abc123",
+        RAZORPAY_KEY_SECRET: "secret-value",
+        RAZORPAY_WEBHOOK_SECRET: "",
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("accepts test-mode Razorpay credentials in development", () => {
+    const env = parseEnv({
+      RAZORPAY_KEY_ID: "rzp_test_abc123",
+      RAZORPAY_KEY_SECRET: "test-secret-value",
+      RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value",
+    });
+
+    expect(env.razorpay).toEqual({
+      keyId: "rzp_test_abc123",
+      keySecret: "test-secret-value",
+      webhookSecret: "webhook-secret-value",
+      testMode: true,
+    });
+  });
+
+  it("rejects live Razorpay keys outside production", () => {
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "rzp_live_abc123",
+        RAZORPAY_KEY_SECRET: "live-secret-value",
+        RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value",
+      }),
+    ).toThrow(EnvValidationError);
+
+    const production = parseEnv({
+      NODE_ENV: "production",
+      DATABASE_URL: productionDatabaseUrl,
+      CORS_ORIGINS: "https://app.subscript.dev",
+      RAZORPAY_KEY_ID: "rzp_live_abc123",
+      RAZORPAY_KEY_SECRET: "live-secret-value",
+      RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value",
+    });
+    expect(production.razorpay?.testMode).toBe(false);
+  });
+
+  it("rejects malformed Razorpay keys and short secrets", () => {
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "pk_test_abc123",
+        RAZORPAY_KEY_SECRET: "test-secret-value",
+        RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value",
+      }),
+    ).toThrow(EnvValidationError);
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "rzp_test_abc123",
+        RAZORPAY_KEY_SECRET: "short",
+        RAZORPAY_WEBHOOK_SECRET: "webhook-secret-value",
+      }),
+    ).toThrow(EnvValidationError);
+    expect(() =>
+      parseEnv({
+        RAZORPAY_KEY_ID: "rzp_test_abc123",
+        RAZORPAY_KEY_SECRET: "test-secret-value",
+        RAZORPAY_WEBHOOK_SECRET: "short",
+      }),
+    ).toThrow(EnvValidationError);
+  });
 });
 
 describe("parseCorsOrigins", () => {

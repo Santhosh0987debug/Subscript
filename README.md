@@ -1,12 +1,17 @@
 # Subscript
 
-Subscript is a multi-tenant subscription and revenue management platform. Phase 4 adds the subscription and billing engine: tenant-scoped subscriptions, a centralized lifecycle state machine, invoice generation with tax and line items, and manual payment records.
+Subscript is a multi-tenant subscription and revenue management platform. Phase 5 adds Razorpay online payments behind a provider-independent gateway: checkout for open invoices, signed webhook reconciliation, and full or partial refunds alongside the existing manual payment records.
 
-Authentication, sessions, organization membership, customers, plans, subscriptions, invoices, and payments are live and enforced by the API. The revenue dashboard still uses illustrative data.
+Authentication, sessions, organization membership, customers, plans, subscriptions, invoices, payments, and gateway transactions are live and enforced by the API. The revenue dashboard still uses illustrative data.
 
-## Manual billing scope
+## Payment scope
 
-Phase 4 is a manual billing engine. It records what your team has billed and collected; it does not connect to a payment gateway, charge a card, or confirm funds with an external processor. Every payment is an internal `MANUAL` entry, and the UI labels it that way. Gateway payment sources are reserved in the schema but are not produced by any endpoint.
+Subscript supports two payment paths that share one billing ledger:
+
+- **Manual** payments record cash, bank transfer, check, or other offline collections.
+- **Gateway** payments use Razorpay Checkout for open invoices. The server creates the provider order, verifies the checkout signature, and only changes balances after the provider confirms capture. Signed webhooks reconcile captures, failures, order payments, and refunds even if the browser closes mid-payment.
+
+With no Razorpay credentials, the gateway is disabled and only manual recording is available. Configure Test Mode keys to exercise checkout locally; live keys are rejected outside production.
 
 ## Stack
 
@@ -35,6 +40,9 @@ Phase 4 is a manual billing engine. It records what your team has billed and col
 - Invoice generation for the current period with configurable tax in basis points, due dates, customer snapshot, and line items
 - Invoice lifecycle: draft, issue, void, mark uncollectible, and paid status derived from successful payments
 - Manual payment records with methods, references, notes, partial payments, pending attempts, success, failure, and refunds
+- Razorpay Checkout for `OPEN` invoices, with server-derived amount and currency, duplicate-attempt protection, and cancellation recovery
+- Server-side HMAC-SHA256 checkout verification plus signed, deduplicated, retry-safe webhooks for captures, failures, order payments, and refunds
+- Full and partial gateway refunds with pending reservations, over-refund rejection, and provider-driven reconciliation
 - Transactional balance updates and idempotent invoice generation; duplicate invoices per subscription period and overpayments are rejected
 - Printable invoice view with print CSS for browser print or save-as-PDF
 - Auth rate limiting, strict request validation, an Origin guard for unsafe methods, and a consistent API error envelope
@@ -71,6 +79,7 @@ subscript/
 │       │   ├── customers/      Validation, stores, serializer, router
 │       │   ├── db/             Prisma client factory
 │       │   ├── errors/
+│       │   ├── gateway/        Provider-neutral gateway, Razorpay adapter, webhook reconciliation
 │       │   ├── invoices/       Invoice/payment validation, stores, router
 │       │   ├── lib/
 │       │   ├── middleware/     Auth, tenancy, roles, rate limits, errors
@@ -134,6 +143,17 @@ The Compose defaults use user `subscript`, password `subscript_dev`, and databas
 
 Leave `DATABASE_URL` commented out. The API uses in-memory stores so registration, login, workspace switching, sessions, catalogues, subscriptions, invoices, and payments can be exercised locally. The stores reset whenever the API restarts and are never used in production. Production requires `DATABASE_URL` and always uses Prisma.
 
+### Razorpay Test Mode (optional)
+
+Online checkout stays disabled until all three Razorpay values are set. To exercise it locally:
+
+1. Create a Razorpay account and switch the dashboard to **Test Mode**.
+2. Generate a Test Key ID and Key Secret under **Account & Settings → API Keys**.
+3. Choose a webhook secret and create a webhook under **Account & Settings → Webhooks** pointing at `https://<your-public-api>/api/webhooks/razorpay`. Subscribe to `payment.captured`, `payment.failed`, `order.paid`, `refund.created`, `refund.processed`, and `refund.failed`.
+4. Set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET` in `apps/server/.env`.
+
+For local webhook testing, expose the API with a tunnel such as ngrok and use the public HTTPS URL. The API verifies the raw request body, so do not let a proxy rewrite it. Test keys (`rzp_test_…`) are accepted in development and test; live keys (`rzp_live_…`) are rejected unless `NODE_ENV=production`. No real charge occurs in Test Mode.
+
 ## Run
 
 ```bash
@@ -169,6 +189,11 @@ Start the API in a second terminal with `npm run start -w @subscript/server` aft
 | `BCRYPT_COST` | No | `12` | Validated 10-14 |
 | `COOKIE_SECURE` | No | `true` in production, `false` otherwise | Set explicitly when terminating TLS elsewhere |
 | `TRUST_PROXY` | No | `false` | Set to `true` only behind a trusted reverse proxy |
+| `RAZORPAY_KEY_ID` | Gateway | — | Test or live publishable key; must start with `rzp_test_` or `rzp_live_` |
+| `RAZORPAY_KEY_SECRET` | Gateway | — | Secret API key; never exposed to the browser or logs |
+| `RAZORPAY_WEBHOOK_SECRET` | Gateway | — | Verifies the `X-Razorpay-Signature` header on webhook deliveries |
+
+Razorpay variables must be supplied together. Leaving all three unset disables online checkout. Live keys are rejected unless `NODE_ENV=production`; Test Mode is the default for local development.
 
 Environment validation fails fast at API startup with readable issues. Internal error details are logged but never returned to clients.
 
@@ -220,7 +245,13 @@ Environment validation fails fast at API startup with readable issues. Internal 
 | `POST` | `/api/invoices/:invoiceId/payments` | Record a manual pending or succeeded payment |
 | `POST` | `/api/payments/:paymentId/succeed` | Confirm a pending payment |
 | `POST` | `/api/payments/:paymentId/fail` | Mark a pending payment failed |
-| `POST` | `/api/payments/:paymentId/refund` | Refund a succeeded payment |
+| `POST` | `/api/payments/:paymentId/refund` | Refund a succeeded manual payment |
+| `GET` | `/api/gateway/config` | Report whether online checkout is configured and in test mode |
+| `POST` | `/api/invoices/:invoiceId/checkout` | Reserve a gateway payment and create a Razorpay order for an open invoice |
+| `POST` | `/api/payments/:paymentId/gateway/verify` | Verify a Checkout signature and apply a captured payment |
+| `POST` | `/api/payments/:paymentId/gateway/cancel` | Release a pending checkout reservation after the modal closes |
+| `POST` | `/api/payments/:paymentId/gateway/refund` | Create a full or partial gateway refund |
+| `POST` | `/api/webhooks/razorpay` | Receive signed Razorpay events with persistent deduplication |
 
 Successful auth responses set the `subscript_session` cookie and use `Cache-Control: no-store`. The raw token exists only in the cookie; JSON responses never contain session tokens or password hashes.
 
@@ -261,11 +292,35 @@ Generating for the same subscription period is idempotent: an existing invoice i
 
 Invoices start as `DRAFT`. Issuing moves them to `OPEN` and stamps the issue and due dates. Voiding and marking uncollectible retain the full record for audit. A paid status is derived from successful payments; the invoice amount due is recomputed from its payments inside the same transaction.
 
-### Manual payments
+### Payments
 
-Payments are manual internal records. Supported methods are cash, bank transfer, card, check, and other. A payment may be recorded as `PENDING` or `SUCCEEDED`; pending attempts can later be confirmed, failed, or left in history. Succeeded payments can be refunded. Partial payments and multiple attempts are supported, while overpayment is rejected. Failed and refunded attempts never reduce the balance.
+Payments keep `MANUAL` and `GATEWAY` attempts in one ledger. Manual payments support cash, bank transfer, card, check, and other methods, and may be recorded as `PENDING` or `SUCCEEDED`. Pending attempts can later be confirmed or failed. Gateway payments are created only through checkout and are controlled by provider events; the manual succeed, fail, and refund endpoints reject them. Failed attempts and pending reservations never reduce the balance.
 
-No payment gateway is contacted. `GATEWAY` is reserved in the data model but no endpoint creates such a payment, and the UI explicitly labels every payment as a manual entry.
+### Razorpay checkout
+
+`POST /api/invoices/:invoiceId/checkout` is available to owners and admins for an `OPEN` invoice with a positive balance. The server derives the amount and currency from the invoice, locks the invoice row, and reserves a `PENDING` gateway payment before calling Razorpay. This prevents two simultaneous checkout orders for the same invoice. An abandoned reservation older than 30 minutes can be replaced on the next attempt.
+
+The browser opens Razorpay Checkout with the returned order ID and publishable key. On success, `POST /api/payments/:paymentId/gateway/verify` receives the order ID, gateway payment ID, and signature. The server verifies the HMAC-SHA256 checkout signature with the key secret, fetches the provider payment, and checks the order, amount, currency, and captured status before applying any balance change. A frontend success callback alone never marks an invoice paid.
+
+If the customer closes the modal, `POST /api/payments/:paymentId/gateway/cancel` marks the local attempt `FAILED` and frees the invoice for a new attempt. A verified webhook can still settle that attempt if the provider captured it despite the closed modal. Duplicate checkout clicks and repeated verification calls are idempotent.
+
+### Razorpay webhooks
+
+`POST /api/webhooks/razorpay` is mounted before the global JSON parser so it receives the exact raw body. The server verifies `X-Razorpay-Signature` against `RAZORPAY_WEBHOOK_SECRET`, requires `X-Razorpay-Event-Id`, normalizes the provider payload, and processes only `payment.captured`, `payment.failed`, `order.paid`, `refund.created`, `refund.processed`, and `refund.failed`.
+
+Each provider event ID is persisted before processing. A completed delivery returns `200 {"status":"duplicate"}` without reapplying the change; a concurrent duplicate receives `409` so Razorpay retries later. Failed processing is recorded and can be retried. Events are matched by internal IDs in notes, provider order ID, and provider payment or refund ID, so out-of-order deliveries are safe:
+
+- Capture is terminal. A late `payment.failed` for a captured payment is ignored.
+- A failed attempt can be recovered by a later capture under the same order, including a different provider payment ID.
+- A processed refund is terminal; a later failure event is ignored. A failure before processing releases the reservation.
+
+Unsupported events return `200 {"status":"ignored"}`; malformed payloads, bad signatures, and missing event IDs return `400`.
+
+### Refunds
+
+Gateway refunds support full and partial amounts. `POST /api/payments/:paymentId/gateway/refund` reserves the requested amount in a `PENDING` refund ledger entry, then calls Razorpay. Pending reservations count against the refundable balance, so concurrent requests cannot over-refund. A full refund sets the payment to `REFUNDED`; partial refunds update `refundedAmountMinor`. The invoice balance and status are recomputed in the same transaction.
+
+A `processed` provider response settles the refund immediately. A `pending` response stays `PENDING` until a signed webhook settles it. If the provider explicitly rejects the request (4xx), the reservation is marked `FAILED` and the balance is released. If the outcome is uncertain (network error, timeout, or 5xx), the reservation stays `PENDING` to avoid issuing a duplicate refund; refresh the invoice and wait for the provider webhook before retrying. Provider-originated refunds created in the Razorpay dashboard are also reconciled into the ledger.
 
 ### Auditing and tenant safety
 
@@ -283,6 +338,11 @@ Every subscription and invoice mutation appends an activity record with the acti
 - Customer, plan, subscription, invoice, and payment mutations require `OWNER` or `ADMIN`; members retain read access.
 - Billing queries are scoped by the session's active organization, so cross-tenant IDs resolve as not found rather than leaking another workspace's records.
 - Invoice generation and payment mutations run in database transactions and rely on unique constraints and row locks instead of trusting client-side totals or statuses.
+- Gateway checkout amounts and currencies come from the invoice, never from the browser. Checkout signatures are verified server-side with timing-safe HMAC comparison, and the provider payment is re-fetched before a balance changes.
+- Razorpay webhook signatures are verified over the raw request body. Provider event IDs are persisted with a unique `(provider, providerEventId)` constraint, and processing is transactional and idempotent.
+- Gateway refunds reserve their amount before calling the provider; pending reservations count against the refundable balance to prevent over-refunds and duplicate concurrent requests.
+- Razorpay key secrets and webhook secrets stay server-side; logs and API responses never include secrets, signatures, or full provider payloads. Gateway credentials are validated and live keys are rejected outside production.
+- Gateway endpoints and webhooks have dedicated rate limits, and every gateway action is organization-scoped.
 - Cross-tenant switches return `403` and leave the session's active organization unchanged.
 - Password hashes, session tokens, and other secrets are never included in API responses.
 
@@ -299,11 +359,13 @@ The Prisma schema defines organization-scoped core entities:
 - `Subscription` (status, quantity, price snapshot, interval, trial, billing periods, lifecycle timestamps, activity)
 - `Invoice` (status, per-organization number, customer snapshot, integer minor-unit totals, tax basis points, billing period, line items, activity)
 - `InvoiceCounter` (per-organization invoice sequence)
-- `Payment` (manual or reserved gateway source, method, status, transaction reference, lifecycle timestamps)
+- `Payment` (manual or gateway source, method, status, provider order/payment/status/metadata, refunded total, lifecycle timestamps)
+- `PaymentRefund` (pending/succeeded/failed provider refund ledger with provider refund ID and reason)
+- `GatewayWebhookEvent` (provider event ID, type, status, payload, organization/payment link, error, timestamps)
 
-All money is stored as integer minor units and paired with an explicit currency code, so currencies without two decimal places (for example JPY) remain correct. API contracts use the same integer representation. Database check constraints keep quantities positive and monetary values non-negative, and unique indexes protect invoice numbering and billing-period idempotency.
+All money is stored as integer minor units and paired with an explicit currency code, so currencies without two decimal places (for example JPY) remain correct. API contracts use the same integer representation. Database check constraints keep quantities positive and monetary values non-negative, and unique indexes protect invoice numbering, billing-period idempotency, provider order/payment IDs, and webhook event IDs.
 
-Committed migrations cover the auth core, the customer/plan catalogue, and the subscription billing engine. Apply them with `npm run db:deploy` in production.
+Committed migrations cover the auth core, the customer/plan catalogue, the subscription billing engine, and the payment gateway. Apply them with `npm run db:deploy` in production.
 
 ## Scripts
 
@@ -332,19 +394,20 @@ npm run build
 npm run db:validate
 ```
 
-The billing suite includes PostgreSQL-only integration tests that exercise real row locks, unique constraints, and concurrent invoice/payment writes. They are skipped unless `TEST_DATABASE_URL` points at a disposable database:
+The billing suite includes PostgreSQL-only integration tests that exercise real row locks, unique constraints, and concurrent invoice/payment/gateway writes. They are skipped unless `TEST_DATABASE_URL` points at a disposable database:
 
 ```bash
 TEST_DATABASE_URL=postgresql://user:password@localhost:55432/subscript_test \
-  npm run test -w @subscript/server -- tests/billing-postgres.test.ts
+  npm run test -w @subscript/server -- tests/billing-postgres.test.ts tests/gateway-postgres.test.ts
 ```
 
-Use a throwaway database for this command. Never point it at a database whose data you need to keep; the test applies migrations and truncates billing tables. Also apply the committed migration against PostgreSQL before a production deployment with `npm run db:deploy`.
+Gateway API tests use a mocked Razorpay server and signed synthetic webhooks; no real payment is created. Use a throwaway database for the PostgreSQL command. Never point it at a database whose data you need to keep. Apply the committed migrations against PostgreSQL before a production deployment with `npm run db:deploy`.
 
 ## Phase boundaries
 
-- Authentication, sessions, organization membership, roles, workspace settings, customers, plans, subscriptions, invoices, and manual payments are implemented.
+- Authentication, sessions, organization membership, roles, workspace settings, customers, plans, subscriptions, invoices, manual payments, and Razorpay gateway payments are implemented.
 - The dashboard's revenue figures remain illustrative preview data; the customer, plan, and billing pages use live API records.
-- Billing is intentionally manual. There is no gateway integration, card charging, checkout, webhook reconciliation, or automatic dunning worker. Lifecycle changes and invoice generation are explicit actions.
+- Automatic dunning, saved cards, subscriptions billed directly by Razorpay, partial capture, and multi-currency conversion are not implemented. Lifecycle changes and invoice generation remain explicit actions.
+- Gateway verification is exercised with mocked Razorpay responses and synthetic signed webhooks. Live end-to-end confirmation requires your own Test Mode or live credentials and a public webhook URL; no real payment is made by the automated suite.
 - Member invitations and role changes are not available yet; the settings page presents the roster the API holds.
 - No secrets are committed; `.env` files are ignored.

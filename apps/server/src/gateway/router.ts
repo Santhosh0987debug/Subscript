@@ -22,6 +22,7 @@ import {
 import { withGatewayErrors } from "./http.js";
 import type { GatewayService } from "./service.js";
 import {
+  cancelGatewayCheckoutSchema,
   gatewayRefundSchema,
   verifyGatewayPaymentSchema,
 } from "./validation.js";
@@ -79,7 +80,7 @@ export function createGatewayRouter(
   );
 
   router.post(
-    API_PATHS.invoiceCheckout(":invoiceId"),
+    "/api/invoices/:invoiceId/checkout",
     options.authenticate,
     options.requireOrganization,
     options.requireAdmin,
@@ -116,7 +117,7 @@ export function createGatewayRouter(
   );
 
   router.post(
-    API_PATHS.paymentGatewayVerify(":paymentId"),
+    "/api/payments/:paymentId/gateway/verify",
     options.authenticate,
     options.requireOrganization,
     options.requireAdmin,
@@ -158,7 +159,60 @@ export function createGatewayRouter(
   );
 
   router.post(
-    API_PATHS.paymentGatewayRefund(":paymentId"),
+    "/api/payments/:paymentId/gateway/cancel",
+    options.authenticate,
+    options.requireOrganization,
+    options.requireAdmin,
+    options.rateLimiter,
+    async (req, res) => {
+      const organization = organizationId(res);
+      const params = parseParams(paymentIdParamsSchema, req.params);
+      const body = parseBody(cancelGatewayCheckoutSchema, req.body);
+      const payment = await options.invoiceStore.findPaymentById(
+        organization,
+        params.paymentId,
+      );
+
+      if (!payment) {
+        throw new AppError(
+          404,
+          "NOT_FOUND",
+          "That payment could not be found.",
+        );
+      }
+
+      const cancelled = await withGatewayErrors(() =>
+        options.gatewayService.cancelCheckout({
+          organizationId: organization,
+          paymentId: payment.id,
+          orderId: body.orderId ?? null,
+          actor: actor(res),
+        }),
+      );
+      const invoice = await options.invoiceStore.findById(
+        organization,
+        cancelled.invoiceId,
+      );
+
+      if (!invoice) {
+        throw new AppError(
+          404,
+          "NOT_FOUND",
+          "The invoice for this payment could not be found.",
+        );
+      }
+
+      const payload: PaymentActionResponse = {
+        payment: toPayment(cancelled),
+        invoice: toInvoice(invoice),
+      };
+
+      res.status(200).json(payload);
+    },
+  );
+
+  router.post(
+    "/api/payments/:paymentId/gateway/refund",
     options.authenticate,
     options.requireOrganization,
     options.requireAdmin,

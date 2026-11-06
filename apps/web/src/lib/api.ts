@@ -14,6 +14,10 @@ import type {
   CustomerResponse,
   GenerateInvoiceRequest,
   GenerateInvoiceResponse,
+  GatewayCheckoutSession,
+  GatewayConfigResponse,
+  GatewayRefundRequest,
+  GatewayRefundResponse,
   HealthResponse,
   InvoiceListParams,
   InvoiceListResponse,
@@ -33,6 +37,7 @@ import type {
   UpdateCustomerRequest,
   UpdateOrganizationResponse,
   UpdatePlanRequest,
+  VerifyGatewayPaymentRequest,
 } from "@subscript/shared";
 
 const API_BASE_URL = (
@@ -540,6 +545,56 @@ export async function refundPayment(
   return requestJson<PaymentActionResponse>(API_PATHS.paymentRefund(paymentId), {
     method: "POST",
   });
+}
+
+export async function getGatewayConfig(
+  signal?: AbortSignal,
+): Promise<GatewayConfigResponse> {
+  return requestJson<GatewayConfigResponse>(API_PATHS.gatewayConfig, {
+    signal,
+  });
+}
+
+export async function startInvoiceCheckout(
+  invoiceId: string,
+): Promise<GatewayCheckoutSession> {
+  return requestJson<GatewayCheckoutSession>(
+    API_PATHS.invoiceCheckout(invoiceId),
+    { method: "POST" },
+  );
+}
+
+export async function verifyGatewayPayment(
+  paymentId: string,
+  input: VerifyGatewayPaymentRequest,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(
+    API_PATHS.paymentGatewayVerify(paymentId),
+    { method: "POST", body: input },
+  );
+}
+
+export async function cancelGatewayCheckout(
+  paymentId: string,
+  orderId?: string | null,
+): Promise<PaymentActionResponse> {
+  return requestJson<PaymentActionResponse>(
+    API_PATHS.paymentGatewayCancel(paymentId),
+    {
+      method: "POST",
+      body: orderId ? { orderId } : {},
+    },
+  );
+}
+
+export async function refundGatewayPayment(
+  paymentId: string,
+  input: GatewayRefundRequest,
+): Promise<GatewayRefundResponse> {
+  return requestJson<GatewayRefundResponse>(
+    API_PATHS.paymentGatewayRefund(paymentId),
+    { method: "POST", body: input },
+  );
 }
 
 function isHealthResponse(value: unknown): value is HealthResponse {

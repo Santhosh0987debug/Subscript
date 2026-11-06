@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Subscription } from "@subscript/shared";
+import type { Payment, Subscription } from "@subscript/shared";
 import {
   formatActivityTime,
   formatBillingDate,
   formatBillingPeriod,
   formatTaxRateBps,
+  getGatewayRefundableMinor,
   getInvoiceActionAvailability,
   getNextBillingSummary,
   getPaymentActionAvailability,
@@ -14,6 +15,36 @@ import {
   paymentStatusLabels,
   subscriptionStatusLabels,
 } from "@/lib/billing";
+
+function makePayment(overrides: Partial<Payment> = {}): Payment {
+  return {
+    id: "payment_1",
+    organizationId: "organization_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "INV-000001",
+    subscriptionId: null,
+    amount: { amountMinor: 2_900, currency: "USD" },
+    method: "CARD",
+    status: "SUCCEEDED",
+    source: "GATEWAY",
+    reference: null,
+    note: null,
+    gateway: {
+      provider: "razorpay",
+      orderId: "order_1",
+      paymentId: "pay_1",
+      status: "captured",
+    },
+    refundedAmount: { amountMinor: 0, currency: "USD" },
+    refunds: [],
+    paidAt: "2026-01-01T00:00:00.000Z",
+    failedAt: null,
+    refundedAt: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 function makeSubscription(overrides: Partial<Subscription>): Subscription {
   return {
@@ -210,5 +241,53 @@ describe("action availability", () => {
       fail: false,
       refund: false,
     });
+  });
+});
+
+describe("gateway refundable balance", () => {
+  it("subtracts completed and pending refunds from a captured gateway payment", () => {
+    const payment = makePayment({
+      refundedAmount: { amountMinor: 1_000, currency: "USD" },
+      refunds: [
+        {
+          id: "refund_1",
+          paymentId: "payment_1",
+          provider: "razorpay",
+          providerRefundId: "rfnd_1",
+          amount: { amountMinor: 500, currency: "USD" },
+          status: "PENDING",
+          reason: null,
+          processedAt: null,
+          failedAt: null,
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(getGatewayRefundableMinor(payment)).toBe(1_400);
+  });
+
+  it("returns zero for manual, pending, and fully refunded payments", () => {
+    expect(getGatewayRefundableMinor(makePayment({ source: "MANUAL" }))).toBe(0);
+    expect(getGatewayRefundableMinor(makePayment({ status: "PENDING" }))).toBe(0);
+    expect(
+      getGatewayRefundableMinor(
+        makePayment({
+          status: "REFUNDED",
+          refundedAmount: { amountMinor: 2_900, currency: "USD" },
+        }),
+      ),
+    ).toBe(0);
+  });
+
+  it("never returns a negative balance", () => {
+    expect(
+      getGatewayRefundableMinor(
+        makePayment({
+          refundedAmount: { amountMinor: 3_000, currency: "USD" },
+        }),
+      ),
+    ).toBe(0);
   });
 });

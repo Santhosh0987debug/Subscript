@@ -1224,7 +1224,8 @@ export function createPrismaInvoiceStore(
 
         if (
           currentPayment.gatewayPaymentId &&
-          currentPayment.gatewayPaymentId !== input.gatewayPaymentId
+          currentPayment.gatewayPaymentId !== input.gatewayPaymentId &&
+          currentPayment.status !== "FAILED"
         ) {
           throw new PaymentStateConflictError(
             "This payment attempt is already linked to a different gateway payment.",
@@ -1807,7 +1808,8 @@ export function createPrismaInvoiceStore(
               event.gatewayOrderId &&
               payment.gatewayOrderId !== event.gatewayOrderId) ||
             (payment.gatewayPaymentId &&
-              payment.gatewayPaymentId !== event.gatewayPaymentId) ||
+              payment.gatewayPaymentId !== event.gatewayPaymentId &&
+              payment.status !== "FAILED") ||
             event.amountMinor !== payment.amountMinor ||
             event.currency !== payment.currency
           ) {
@@ -1978,7 +1980,7 @@ export function createPrismaInvoiceStore(
           refund = rows[0] ?? null;
         }
 
-        let payment: LockedPayment | null = null;
+        let payment: LockedPayment | null;
 
         if (refund) {
           payment = await lockPaymentRow(

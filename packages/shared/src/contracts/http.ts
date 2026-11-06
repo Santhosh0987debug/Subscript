@@ -63,6 +63,8 @@ export const API_PATHS = {
     `/api/payments/${encodeURIComponent(paymentId)}/refund`,
   paymentGatewayVerify: (paymentId: string) =>
     `/api/payments/${encodeURIComponent(paymentId)}/gateway/verify`,
+  paymentGatewayCancel: (paymentId: string) =>
+    `/api/payments/${encodeURIComponent(paymentId)}/gateway/cancel`,
   paymentGatewayRefund: (paymentId: string) =>
     `/api/payments/${encodeURIComponent(paymentId)}/gateway/refund`,
   gatewayConfig: "/api/gateway/config",

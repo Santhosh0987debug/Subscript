@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseTaxRateBps,
+  validateGatewayRefundForm,
   validateGenerateInvoiceForm,
   validatePaymentForm,
   validateSubscriptionForm,
@@ -194,5 +195,51 @@ describe("payment form validation", () => {
 
     expect(errors.reference).toBeDefined();
     expect(errors.note).toBeDefined();
+  });
+});
+
+describe("gateway refund form validation", () => {
+  const options = { refundableMinor: 2_900, currency: "USD" };
+
+  it("accepts a partial or full refundable amount", () => {
+    expect(
+      validateGatewayRefundForm({ amount: "10.00", reason: "" }, options),
+    ).toEqual({ errors: {}, amountMinor: 1_000 });
+    expect(
+      validateGatewayRefundForm({ amount: "29.00", reason: "Full credit" }, options),
+    ).toEqual({ errors: {}, amountMinor: 2_900 });
+  });
+
+  it("requires an amount greater than zero", () => {
+    expect(
+      validateGatewayRefundForm({ amount: "", reason: "" }, options).errors.amount,
+    ).toBeDefined();
+    expect(
+      validateGatewayRefundForm({ amount: "0", reason: "" }, options).errors
+        .amount,
+    ).toBeDefined();
+    expect(
+      validateGatewayRefundForm({ amount: "not-money", reason: "" }, options)
+        .errors.amount,
+    ).toBeDefined();
+  });
+
+  it("rejects refunds above the refundable balance", () => {
+    const result = validateGatewayRefundForm(
+      { amount: "29.01", reason: "" },
+      options,
+    );
+
+    expect(result.amountMinor).toBe(2_901);
+    expect(result.errors.amount).toContain("$29.00");
+  });
+
+  it("limits the optional reason to 500 characters", () => {
+    const result = validateGatewayRefundForm(
+      { amount: "10.00", reason: "r".repeat(501) },
+      options,
+    );
+
+    expect(result.errors.reason).toBeDefined();
   });
 });
