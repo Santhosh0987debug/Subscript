@@ -162,6 +162,36 @@ export function createMemorySubscriptionStore(): SubscriptionStore {
       return subscription;
     },
 
+    async listUpcomingRenewals(organizationId, from, until, limit) {
+      return [...subscriptions.values()]
+        .filter(
+          (subscription) =>
+            subscription.organizationId === organizationId &&
+            (subscription.status === "ACTIVE" ||
+              subscription.status === "TRIALING"),
+        )
+        .map((subscription) => ({
+          subscription,
+          renewalDate:
+            subscription.status === "TRIALING" &&
+            subscription.trialEndsAt !== null
+              ? subscription.trialEndsAt
+              : subscription.currentPeriodEnd,
+        }))
+        .filter(
+          ({ renewalDate }) =>
+            renewalDate.getTime() >= from.getTime() &&
+            renewalDate.getTime() <= until.getTime(),
+        )
+        .sort(
+          (left, right) =>
+            left.renewalDate.getTime() - right.renewalDate.getTime() ||
+            left.subscription.id.localeCompare(right.subscription.id),
+        )
+        .slice(0, limit)
+        .map(({ subscription }) => subscription);
+    },
+
     async applyLifecycleChange(
       organizationId,
       subscriptionId,

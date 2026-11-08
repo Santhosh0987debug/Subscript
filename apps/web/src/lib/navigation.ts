@@ -1,4 +1,5 @@
 import {
+  Activity,
   CreditCard,
   LayoutDashboard,
   Layers,
@@ -20,6 +21,7 @@ export const primaryNavigation: readonly NavigationItem[] = [
   { label: "Plans", to: "/plans", icon: Layers },
   { label: "Subscriptions", to: "/subscriptions", icon: CreditCard },
   { label: "Invoices", to: "/invoices", icon: ReceiptText },
+  { label: "Operations", to: "/automation", icon: Activity },
 ];
 
 export const secondaryNavigation: readonly NavigationItem[] = [

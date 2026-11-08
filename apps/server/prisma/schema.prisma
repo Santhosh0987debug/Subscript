@@ -114,6 +114,52 @@ enum GatewayWebhookStatus {
   FAILED
 }
 
+enum AutomationJobType {
+  RENEWAL_REMINDER
+  TRIAL_ENDING_REMINDER
+  TRIAL_ACTIVATION
+  RECURRING_INVOICE
+  CANCEL_AT_PERIOD_END
+  STATUS_SYNC
+  PAYMENT_RECOVERY
+  SUBSCRIPTION_EXPIRATION
+}
+
+enum AutomationQueueName {
+  BILLING
+  NOTIFICATIONS
+}
+
+enum AutomationJobStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD_LETTER
+  CANCELED
+}
+
+enum NotificationType {
+  RENEWAL_UPCOMING
+  TRIAL_ENDING
+  INVOICE_GENERATED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  SUBSCRIPTION_CANCELED
+  REFUND_UPDATED
+}
+
+enum NotificationStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  DEAD_LETTER
+  SKIPPED
+}
+
 model User {
   id           String    @id @default(uuid()) @db.Uuid
   email        String    @unique @db.VarChar(320)
@@ -150,6 +196,8 @@ model Organization {
   payments               Payment[]
   paymentRefunds         PaymentRefund[]
   invoiceCounter         InvoiceCounter?
+  automationJobs         AutomationJob[]
+  notifications          Notification[]
 
   @@map("organizations")
 }
@@ -470,6 +518,69 @@ model PaymentRefund {
   @@index([organizationId, paymentId, createdAt])
   @@index([organizationId, invoiceId, createdAt])
   @@map("payment_refunds")
+}
+
+model AutomationJob {
+  id                 String              @id @default(uuid()) @db.Uuid
+  organizationId     String              @db.Uuid
+  type               AutomationJobType
+  queue              AutomationQueueName
+  status             AutomationJobStatus @default(PENDING)
+  idempotencyKey     String              @unique @db.VarChar(240)
+  targetType         String              @db.VarChar(60)
+  targetId           String?             @db.Uuid
+  runAt              DateTime            @db.Timestamptz(3)
+  attempts           Int                 @default(0) @db.Integer
+  maxAttempts        Int                 @default(5) @db.Integer
+  dispatchGeneration Int                 @default(0) @db.Integer
+  lockedAt           DateTime?           @db.Timestamptz(3)
+  lockedBy           String?             @db.VarChar(120)
+  lastError          String?             @db.Text
+  resultSummary      String?             @db.VarChar(500)
+  startedAt          DateTime?           @db.Timestamptz(3)
+  finishedAt         DateTime?           @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status, runAt])
+  @@index([status, runAt])
+  @@index([queue, status])
+  @@index([organizationId, type, targetId, createdAt])
+  @@map("automation_jobs")
+}
+
+model Notification {
+  id                String             @id @default(uuid()) @db.Uuid
+  organizationId    String             @db.Uuid
+  customerId        String?            @db.Uuid
+  subscriptionId    String?            @db.Uuid
+  invoiceId         String?            @db.Uuid
+  type              NotificationType
+  status            NotificationStatus @default(PENDING)
+  dedupeKey         String             @unique @db.VarChar(240)
+  recipientEmail    String             @db.VarChar(320)
+  subject           String             @db.VarChar(240)
+  bodyText          String             @db.Text
+  bodyHtml          String?            @db.Text
+  attempts          Int                @default(0) @db.Integer
+  maxAttempts       Int                @default(5) @db.Integer
+  nextAttemptAt     DateTime?          @db.Timestamptz(3)
+  queuedAt          DateTime?          @db.Timestamptz(3)
+  lastError         String?            @db.Text
+  providerName      String?            @db.VarChar(40)
+  providerMessageId String?            @db.VarChar(200)
+  sentAt            DateTime?          @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, type, createdAt])
+  @@map("notifications")
 }
 
 model GatewayWebhookEvent {

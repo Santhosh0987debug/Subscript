@@ -5,6 +5,8 @@ import helmet from "helmet";
 import { API_PATHS } from "@subscript/shared";
 import type { AuthService } from "./auth/service.js";
 import { SESSION_COOKIE_NAME } from "./auth/session-token.js";
+import { createAutomationRouter } from "./automation/router.js";
+import type { AutomationRouterOptions } from "./automation/router.js";
 import type { CustomerStore } from "./customers/types.js";
 import { createCustomersRouter } from "./customers/router.js";
 import type { InvoiceStore } from "./invoices/types.js";
@@ -45,6 +47,11 @@ const DEFAULT_CORS_ORIGINS = [
 
 const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+export type AutomationAppOptions = Omit<
+  AutomationRouterOptions,
+  "authenticate" | "requireOrganization" | "requireAdmin"
+>;
+
 export interface AppOptions {
   authService: AuthService;
   customerStore: CustomerStore;
@@ -53,6 +60,7 @@ export interface AppOptions {
   invoiceStore: InvoiceStore;
   gateway?: PaymentGateway | null;
   gatewayWebhookStore?: GatewayWebhookStore;
+  automation?: AutomationAppOptions | null;
   corsOrigins?: readonly string[];
   cookieName?: string;
   cookieSecure?: boolean;
@@ -204,6 +212,17 @@ export function createApp(options: AppOptions): Express {
       requireAdmin: requireRole("OWNER", "ADMIN"),
     }),
   );
+
+  if (options.automation) {
+    app.use(
+      createAutomationRouter({
+        ...options.automation,
+        authenticate,
+        requireOrganization,
+        requireAdmin: requireRole("OWNER", "ADMIN"),
+      }),
+    );
+  }
 
   app.use(notFoundHandler);
   app.use(errorHandler);

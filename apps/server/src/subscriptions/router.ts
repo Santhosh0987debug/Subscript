@@ -116,6 +116,11 @@ function lifecycleActivity(
         type: "PAST_DUE",
         message: "Marked this subscription past due.",
       };
+    case "activate":
+      return {
+        type: "ACTIVATED",
+        message: "Activated this subscription after outstanding invoices were settled.",
+      };
     case "cancel":
       return atPeriodEnd === false
         ? {
@@ -387,6 +392,10 @@ export function createSubscriptionsRouter(
     {
       path: "/api/subscriptions/:subscriptionId/mark-past-due",
       action: "markPastDue",
+    },
+    {
+      path: "/api/subscriptions/:subscriptionId/activate",
+      action: "activate",
     },
   ];
 

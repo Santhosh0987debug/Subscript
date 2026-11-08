@@ -38,6 +38,8 @@ export const API_PATHS = {
     `/api/subscriptions/${encodeURIComponent(subscriptionId)}/expire`,
   subscriptionMarkPastDue: (subscriptionId: string) =>
     `/api/subscriptions/${encodeURIComponent(subscriptionId)}/mark-past-due`,
+  subscriptionActivate: (subscriptionId: string) =>
+    `/api/subscriptions/${encodeURIComponent(subscriptionId)}/activate`,
   subscriptionInvoices: (subscriptionId: string) =>
     `/api/subscriptions/${encodeURIComponent(subscriptionId)}/invoices`,
   invoices: "/api/invoices",
@@ -69,6 +71,14 @@ export const API_PATHS = {
     `/api/payments/${encodeURIComponent(paymentId)}/gateway/refund`,
   gatewayConfig: "/api/gateway/config",
   razorpayWebhook: "/api/webhooks/razorpay",
+  automationOverview: "/api/automation/overview",
+  automationJobs: "/api/automation/jobs",
+  automationJobRetry: (jobId: string) =>
+    `/api/automation/jobs/${encodeURIComponent(jobId)}/retry`,
+  automationNotifications: "/api/automation/notifications",
+  automationNotificationRetry: (notificationId: string) =>
+    `/api/automation/notifications/${encodeURIComponent(notificationId)}/retry`,
+  automationDispatch: "/api/automation/dispatch",
 } as const;
 
 /**

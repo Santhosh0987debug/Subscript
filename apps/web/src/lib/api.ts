@@ -3,6 +3,14 @@ import type {
   ApiErrorCode,
   ApiErrorResponse,
   ApiFieldIssue,
+  AutomationDispatchResponse,
+  AutomationJobListParams,
+  AutomationJobListResponse,
+  AutomationJobResponse,
+  AutomationNotificationListParams,
+  AutomationNotificationListResponse,
+  AutomationNotificationResponse,
+  AutomationOverviewResponse,
   CancelSubscriptionRequest,
   CreateCustomerRequest,
   CreatePlanRequest,
@@ -594,6 +602,74 @@ export async function refundGatewayPayment(
   return requestJson<GatewayRefundResponse>(
     API_PATHS.paymentGatewayRefund(paymentId),
     { method: "POST", body: input },
+  );
+}
+
+export async function getAutomationOverview(
+  signal?: AbortSignal,
+): Promise<AutomationOverviewResponse> {
+  return requestJson<AutomationOverviewResponse>(
+    API_PATHS.automationOverview,
+    { signal },
+  );
+}
+
+export async function listAutomationJobs(
+  params: AutomationJobListParams = {},
+  signal?: AbortSignal,
+): Promise<AutomationJobListResponse> {
+  const query = buildQuery({
+    status: params.status,
+    type: params.type,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<AutomationJobListResponse>(
+    `${API_PATHS.automationJobs}${query}`,
+    { signal },
+  );
+}
+
+export async function retryAutomationJob(
+  jobId: string,
+): Promise<AutomationJobResponse> {
+  return requestJson<AutomationJobResponse>(
+    API_PATHS.automationJobRetry(jobId),
+    { method: "POST" },
+  );
+}
+
+export async function listAutomationNotifications(
+  params: AutomationNotificationListParams = {},
+  signal?: AbortSignal,
+): Promise<AutomationNotificationListResponse> {
+  const query = buildQuery({
+    status: params.status,
+    type: params.type,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+
+  return requestJson<AutomationNotificationListResponse>(
+    `${API_PATHS.automationNotifications}${query}`,
+    { signal },
+  );
+}
+
+export async function retryAutomationNotification(
+  notificationId: string,
+): Promise<AutomationNotificationResponse> {
+  return requestJson<AutomationNotificationResponse>(
+    API_PATHS.automationNotificationRetry(notificationId),
+    { method: "POST" },
+  );
+}
+
+export async function dispatchAutomationOutbox(): Promise<AutomationDispatchResponse> {
+  return requestJson<AutomationDispatchResponse>(
+    API_PATHS.automationDispatch,
+    { method: "POST" },
   );
 }
 

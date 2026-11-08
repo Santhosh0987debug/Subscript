@@ -14,6 +14,37 @@ export interface RazorpayEnv {
   testMode: boolean;
 }
 
+export interface SmtpEnv {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string | null;
+  password: string | null;
+}
+
+export interface AutomationEnv {
+  queuePrefix: string;
+  billingConcurrency: number;
+  notificationConcurrency: number;
+  sweepIntervalMs: number;
+  renewalReminderWindowDays: number;
+  trialReminderWindowDays: number;
+  invoiceDueInDays: number;
+  invoiceTaxRateBps: number;
+  jobMaxAttempts: number;
+  jobBackoffBaseMs: number;
+  jobBackoffMaxMs: number;
+  paymentRetryBaseMs: number;
+  paymentRetryMaxMs: number;
+  paymentRetryMaxAttempts: number;
+  paymentExhaustionAction: "MARK_PAST_DUE" | "CANCEL";
+  pastDueExpiryDays: number;
+  workerStaleMs: number;
+  notificationMaxAttempts: number;
+  notificationRetryBaseMs: number;
+  notificationRetryMaxMs: number;
+}
+
 export interface ServerEnv {
   nodeEnv: NodeEnvironment;
   port: number;
@@ -24,6 +55,10 @@ export interface ServerEnv {
   cookieSecure: boolean;
   trustProxy: boolean;
   razorpay: RazorpayEnv | null;
+  redisUrl: string | null;
+  smtp: SmtpEnv | null;
+  emailFrom: string;
+  automation: AutomationEnv;
 }
 
 type EnvSource = Record<string, string | undefined>;
@@ -40,6 +75,39 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().trim().optional(),
   RAZORPAY_KEY_SECRET: z.string().trim().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().trim().optional(),
+  REDIS_URL: z.string().trim().optional(),
+  AUTOMATION_QUEUE_PREFIX: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{1,40}$/)
+    .default("subscript"),
+  AUTOMATION_BILLING_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
+  AUTOMATION_NOTIFICATION_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
+  AUTOMATION_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(15).max(3_600).default(60),
+  AUTOMATION_RENEWAL_REMINDER_WINDOW_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+  AUTOMATION_TRIAL_REMINDER_WINDOW_DAYS: z.coerce.number().int().min(1).max(30).default(3),
+  AUTOMATION_INVOICE_DUE_IN_DAYS: z.coerce.number().int().min(0).max(60).default(7),
+  AUTOMATION_INVOICE_TAX_RATE_BPS: z.coerce.number().int().min(0).max(5_000).default(0),
+  AUTOMATION_JOB_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  AUTOMATION_JOB_BACKOFF_BASE_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  AUTOMATION_JOB_BACKOFF_MAX_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  AUTOMATION_PAYMENT_RETRY_BASE_MINUTES: z.coerce.number().int().min(1).max(10_080).default(60),
+  AUTOMATION_PAYMENT_RETRY_MAX_MINUTES: z.coerce.number().int().min(1).max(43_200).default(1_440),
+  AUTOMATION_PAYMENT_RETRY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(4),
+  AUTOMATION_PAYMENT_EXHAUSTION_ACTION: z
+    .enum(["MARK_PAST_DUE", "CANCEL"])
+    .default("MARK_PAST_DUE"),
+  AUTOMATION_PAST_DUE_EXPIRY_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  AUTOMATION_WORKER_STALE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(300),
+  NOTIFICATION_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  NOTIFICATION_RETRY_BASE_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  NOTIFICATION_RETRY_MAX_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  EMAIL_FROM: z.string().trim().optional(),
+  SMTP_HOST: z.string().trim().optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
+  SMTP_SECURE: z.enum(["true", "false"]).default("false"),
+  SMTP_USER: z.string().trim().optional(),
+  SMTP_PASSWORD: z.string().optional(),
 });
 
 export class EnvValidationError extends Error {
@@ -59,6 +127,26 @@ function isPostgresUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isRedisUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "redis:" || url.protocol === "rediss:";
+  } catch {
+    return false;
+  }
+}
+
+function isEmailSender(value: string): boolean {
+  if (value.length > 320 || /[\r\n]/.test(value)) {
+    return false;
+  }
+
+  const bracketed = /<([^<>]+)>$/.exec(value);
+  const address = (bracketed?.[1] ?? value).trim();
+
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address);
 }
 
 function normalizeOrigin(value: string): string | null {
@@ -118,6 +206,33 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET,
     RAZORPAY_WEBHOOK_SECRET,
+    REDIS_URL,
+    AUTOMATION_QUEUE_PREFIX,
+    AUTOMATION_BILLING_CONCURRENCY,
+    AUTOMATION_NOTIFICATION_CONCURRENCY,
+    AUTOMATION_SWEEP_INTERVAL_SECONDS,
+    AUTOMATION_RENEWAL_REMINDER_WINDOW_DAYS,
+    AUTOMATION_TRIAL_REMINDER_WINDOW_DAYS,
+    AUTOMATION_INVOICE_DUE_IN_DAYS,
+    AUTOMATION_INVOICE_TAX_RATE_BPS,
+    AUTOMATION_JOB_MAX_ATTEMPTS,
+    AUTOMATION_JOB_BACKOFF_BASE_SECONDS,
+    AUTOMATION_JOB_BACKOFF_MAX_SECONDS,
+    AUTOMATION_PAYMENT_RETRY_BASE_MINUTES,
+    AUTOMATION_PAYMENT_RETRY_MAX_MINUTES,
+    AUTOMATION_PAYMENT_RETRY_MAX_ATTEMPTS,
+    AUTOMATION_PAYMENT_EXHAUSTION_ACTION,
+    AUTOMATION_PAST_DUE_EXPIRY_DAYS,
+    AUTOMATION_WORKER_STALE_SECONDS,
+    NOTIFICATION_MAX_ATTEMPTS,
+    NOTIFICATION_RETRY_BASE_SECONDS,
+    NOTIFICATION_RETRY_MAX_SECONDS,
+    EMAIL_FROM,
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_SECURE,
+    SMTP_USER,
+    SMTP_PASSWORD,
   } = parsed.data;
   const issues: string[] = [];
   const databaseUrl = DATABASE_URL && DATABASE_URL.length > 0 ? DATABASE_URL : null;
@@ -223,6 +338,66 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     };
   }
 
+  const redisUrl = REDIS_URL && REDIS_URL.length > 0 ? REDIS_URL : null;
+
+  if (redisUrl && !isRedisUrl(redisUrl)) {
+    issues.push("REDIS_URL: must use the redis:// or rediss:// protocol");
+  }
+
+  const emailFrom =
+    EMAIL_FROM && EMAIL_FROM.length > 0
+      ? EMAIL_FROM
+      : "Subscript <no-reply@subscript.local>";
+
+  if (!isEmailSender(emailFrom)) {
+    issues.push("EMAIL_FROM: must be a valid sender address, optionally with a display name");
+  }
+
+  let smtp: SmtpEnv | null = null;
+  const smtpUser = SMTP_USER && SMTP_USER.length > 0 ? SMTP_USER : null;
+  const smtpPassword =
+    SMTP_PASSWORD && SMTP_PASSWORD.length > 0 ? SMTP_PASSWORD : null;
+
+  if (SMTP_HOST && SMTP_HOST.length > 0) {
+    if ((smtpUser === null) !== (smtpPassword === null)) {
+      issues.push("SMTP_USER and SMTP_PASSWORD must be configured together");
+    }
+
+    smtp = {
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_SECURE === "true",
+      user: smtpUser,
+      password: smtpPassword,
+    };
+  } else if (smtpUser || smtpPassword) {
+    issues.push("SMTP_HOST: is required when SMTP credentials are configured");
+  }
+
+  if (
+    AUTOMATION_JOB_BACKOFF_MAX_SECONDS <
+    AUTOMATION_JOB_BACKOFF_BASE_SECONDS
+  ) {
+    issues.push(
+      "AUTOMATION_JOB_BACKOFF_MAX_SECONDS: must be greater than or equal to AUTOMATION_JOB_BACKOFF_BASE_SECONDS",
+    );
+  }
+
+  if (
+    AUTOMATION_PAYMENT_RETRY_MAX_MINUTES <
+    AUTOMATION_PAYMENT_RETRY_BASE_MINUTES
+  ) {
+    issues.push(
+      "AUTOMATION_PAYMENT_RETRY_MAX_MINUTES: must be greater than or equal to AUTOMATION_PAYMENT_RETRY_BASE_MINUTES",
+    );
+  }
+
+  if (NOTIFICATION_RETRY_MAX_SECONDS < NOTIFICATION_RETRY_BASE_SECONDS) {
+    issues.push(
+      "NOTIFICATION_RETRY_MAX_SECONDS: must be greater than or equal to NOTIFICATION_RETRY_BASE_SECONDS",
+    );
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -237,5 +412,30 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     cookieSecure,
     trustProxy: TRUST_PROXY === "true",
     razorpay,
+    redisUrl,
+    smtp,
+    emailFrom,
+    automation: {
+      queuePrefix: AUTOMATION_QUEUE_PREFIX,
+      billingConcurrency: AUTOMATION_BILLING_CONCURRENCY,
+      notificationConcurrency: AUTOMATION_NOTIFICATION_CONCURRENCY,
+      sweepIntervalMs: AUTOMATION_SWEEP_INTERVAL_SECONDS * 1_000,
+      renewalReminderWindowDays: AUTOMATION_RENEWAL_REMINDER_WINDOW_DAYS,
+      trialReminderWindowDays: AUTOMATION_TRIAL_REMINDER_WINDOW_DAYS,
+      invoiceDueInDays: AUTOMATION_INVOICE_DUE_IN_DAYS,
+      invoiceTaxRateBps: AUTOMATION_INVOICE_TAX_RATE_BPS,
+      jobMaxAttempts: AUTOMATION_JOB_MAX_ATTEMPTS,
+      jobBackoffBaseMs: AUTOMATION_JOB_BACKOFF_BASE_SECONDS * 1_000,
+      jobBackoffMaxMs: AUTOMATION_JOB_BACKOFF_MAX_SECONDS * 1_000,
+      paymentRetryBaseMs: AUTOMATION_PAYMENT_RETRY_BASE_MINUTES * 60_000,
+      paymentRetryMaxMs: AUTOMATION_PAYMENT_RETRY_MAX_MINUTES * 60_000,
+      paymentRetryMaxAttempts: AUTOMATION_PAYMENT_RETRY_MAX_ATTEMPTS,
+      paymentExhaustionAction: AUTOMATION_PAYMENT_EXHAUSTION_ACTION,
+      pastDueExpiryDays: AUTOMATION_PAST_DUE_EXPIRY_DAYS,
+      workerStaleMs: AUTOMATION_WORKER_STALE_SECONDS * 1_000,
+      notificationMaxAttempts: NOTIFICATION_MAX_ATTEMPTS,
+      notificationRetryBaseMs: NOTIFICATION_RETRY_BASE_SECONDS * 1_000,
+      notificationRetryMaxMs: NOTIFICATION_RETRY_MAX_SECONDS * 1_000,
+    },
   };
 }

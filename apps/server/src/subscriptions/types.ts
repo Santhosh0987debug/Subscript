@@ -109,6 +109,12 @@ export interface SubscriptionStore {
     subscriptionId: string,
   ): Promise<SubscriptionRecord | null>;
   create(input: CreateSubscriptionInput): Promise<SubscriptionRecord>;
+  listUpcomingRenewals(
+    organizationId: string,
+    from: Date,
+    until: Date,
+    limit: number,
+  ): Promise<SubscriptionRecord[]>;
   applyLifecycleChange(
     organizationId: string,
     subscriptionId: string,

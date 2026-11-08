@@ -1,6 +1,17 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
+import { createMemoryAutomationCandidateSource } from "./automation/candidates/memory.js";
+import { createPrismaAutomationCandidateSource } from "./automation/candidates/prisma.js";
+import { createEmailProvider } from "./automation/notifications/provider.js";
+import { createNotificationService } from "./automation/notifications/service.js";
+import {
+  createAutomationQueueClient,
+  createDisabledAutomationHealth,
+} from "./automation/queue/client.js";
+import { createAutomationService } from "./automation/service.js";
+import { createMemoryAutomationStore } from "./automation/store/memory.js";
+import { createPrismaAutomationStore } from "./automation/store/prisma.js";
 import { createAuthService } from "./auth/service.js";
 import { createMemoryAuthStore } from "./auth/store/memory.js";
 import { createPrismaAuthStore } from "./auth/store/prisma.js";
@@ -81,6 +92,73 @@ function startServer(): void {
     sessionTtlMs: env.sessionTtlMs,
   });
 
+  const automationStore = prisma
+    ? createPrismaAutomationStore(prisma)
+    : createMemoryAutomationStore();
+  const automationCandidates = prisma
+    ? createPrismaAutomationCandidateSource(prisma)
+    : createMemoryAutomationCandidateSource();
+  const queueClient =
+    prisma && env.redisUrl
+      ? createAutomationQueueClient({
+          redisUrl: env.redisUrl,
+          prefix: env.automation.queuePrefix,
+          store: automationStore,
+        })
+      : null;
+  const emailProvider = createEmailProvider(env.smtp);
+  const notificationService = createNotificationService({
+    store: automationStore,
+    provider: emailProvider,
+    from: env.emailFrom,
+    maxAttempts: env.automation.notificationMaxAttempts,
+    retryBaseMs: env.automation.notificationRetryBaseMs,
+    retryMaxMs: env.automation.notificationRetryMaxMs,
+    dispatcher: queueClient?.dispatcher ?? null,
+  });
+  const automationService = createAutomationService({
+    store: automationStore,
+    candidates: automationCandidates,
+    subscriptions: subscriptionStore,
+    invoices: invoiceStore,
+    customers: customerStore,
+    notifications: notificationService,
+    dispatcher: queueClient?.dispatcher ?? null,
+    config: {
+      renewalReminderWindowDays: env.automation.renewalReminderWindowDays,
+      trialReminderWindowDays: env.automation.trialReminderWindowDays,
+      invoiceDueInDays: env.automation.invoiceDueInDays,
+      invoiceTaxRateBps: env.automation.invoiceTaxRateBps,
+      jobMaxAttempts: env.automation.jobMaxAttempts,
+      jobBackoffBaseMs: env.automation.jobBackoffBaseMs,
+      jobBackoffMaxMs: env.automation.jobBackoffMaxMs,
+      paymentRetryBaseMs: env.automation.paymentRetryBaseMs,
+      paymentRetryMaxMs: env.automation.paymentRetryMaxMs,
+      paymentRetryMaxAttempts: env.automation.paymentRetryMaxAttempts,
+      paymentExhaustionAction: env.automation.paymentExhaustionAction,
+      pastDueExpiryDays: env.automation.pastDueExpiryDays,
+      workerStaleMs: env.automation.workerStaleMs,
+    },
+  });
+  const automationHealth = async () => {
+    if (queueClient) {
+      return queueClient.readHealth();
+    }
+
+    return env.redisUrl
+      ? createDisabledAutomationHealth(
+          "Automation workers require DATABASE_URL and REDIS_URL.",
+          true,
+        )
+      : createDisabledAutomationHealth();
+  };
+
+  if (env.redisUrl && !prisma) {
+    logger.warn(
+      "REDIS_URL is set but DATABASE_URL is not; background automation is disabled until PostgreSQL is configured.",
+    );
+  }
+
   const app = createApp({
     authService,
     customerStore,
@@ -89,6 +167,14 @@ function startServer(): void {
     invoiceStore,
     gateway,
     gatewayWebhookStore,
+    automation: {
+      store: automationStore,
+      service: automationService,
+      notificationService,
+      subscriptionStore,
+      health: automationHealth,
+      renewalWindowDays: env.automation.renewalReminderWindowDays,
+    },
     corsOrigins: env.corsOrigins,
     cookieSecure: env.cookieSecure,
     sessionTtlMs: env.sessionTtlMs,
@@ -115,6 +201,19 @@ function startServer(): void {
       clearTimeout(forceExitTimer);
 
       const finish = async (): Promise<void> => {
+        if (queueClient) {
+          try {
+            await queueClient.close();
+          } catch (queueError) {
+            logger.error("Failed to close the automation queue client", {
+              error:
+                queueError instanceof Error
+                  ? queueError.message
+                  : String(queueError),
+            });
+          }
+        }
+
         if (prisma) {
           try {
             await prisma.$disconnect();
@@ -152,6 +251,11 @@ function startServer(): void {
       port: env.port,
       environment: env.nodeEnv,
       authStore: prisma ? "postgresql" : "memory",
+      automation: {
+        enabled: queueClient !== null,
+        queuePrefix: env.automation.queuePrefix,
+        emailProvider: emailProvider.name,
+      },
       gateway: gateway
         ? { enabled: true, testMode: gateway.testMode }
         : { enabled: false },

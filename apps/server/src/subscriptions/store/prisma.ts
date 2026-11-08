@@ -195,6 +195,49 @@ export function createPrismaSubscriptionStore(
       });
     },
 
+    async listUpcomingRenewals(organizationId, from, until, limit) {
+      const [trialing, active] = await Promise.all([
+        prisma.subscription.findMany({
+          where: {
+            organizationId,
+            status: "TRIALING",
+            trialEndsAt: { gte: from, lte: until },
+          },
+          include: subscriptionInclude,
+          orderBy: { trialEndsAt: "asc" },
+          take: limit,
+        }),
+        prisma.subscription.findMany({
+          where: {
+            organizationId,
+            status: "ACTIVE",
+            currentPeriodEnd: { gte: from, lte: until },
+          },
+          include: subscriptionInclude,
+          orderBy: { currentPeriodEnd: "asc" },
+          take: limit,
+        }),
+      ]);
+
+      return [...trialing, ...active]
+        .map(mapSubscription)
+        .map((subscription) => ({
+          subscription,
+          renewalDate:
+            subscription.status === "TRIALING" &&
+            subscription.trialEndsAt !== null
+              ? subscription.trialEndsAt
+              : subscription.currentPeriodEnd,
+        }))
+        .sort(
+          (left, right) =>
+            left.renewalDate.getTime() - right.renewalDate.getTime() ||
+            left.subscription.id.localeCompare(right.subscription.id),
+        )
+        .slice(0, limit)
+        .map(({ subscription }) => subscription);
+    },
+
     async applyLifecycleChange(
       organizationId,
       subscriptionId,

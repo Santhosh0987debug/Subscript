@@ -17,6 +17,7 @@ export const SUBSCRIPTION_ACTIONS = [
   "renew",
   "expire",
   "markPastDue",
+  "activate",
 ] as const;
 export type SubscriptionAction = (typeof SUBSCRIPTION_ACTIONS)[number];
 
@@ -26,6 +27,12 @@ export interface SubscriptionTransitionInput {
   action: SubscriptionAction;
   /** For cancel: true keeps service until the current period ends. */
   atPeriodEnd?: boolean;
+  /**
+   * Internal automation may end a cancellation that is already scheduled for
+   * period end. User-facing calls never set this, so double-scheduling is still
+   * rejected.
+   */
+  force?: boolean;
 }
 
 export interface SubscriptionTransition {
@@ -43,6 +50,7 @@ const actionLabels: Record<SubscriptionAction, string> = {
   renew: "renew",
   expire: "expire",
   markPastDue: "mark past due",
+  activate: "activate",
 };
 
 function invalid(
@@ -102,6 +110,18 @@ export function resolveSubscriptionTransition(
         activityType: "PAST_DUE",
       };
 
+    case "activate":
+      if (status !== "PAST_DUE") {
+        invalid(status, action);
+      }
+
+      return {
+        status: "ACTIVE",
+        cancelAtPeriodEnd: input.cancelAtPeriodEnd,
+        advancePeriod: false,
+        activityType: "ACTIVATED",
+      };
+
     case "cancel": {
       const atPeriodEnd = input.atPeriodEnd ?? true;
 
@@ -109,7 +129,7 @@ export function resolveSubscriptionTransition(
         invalid(status, action);
       }
 
-      if (input.cancelAtPeriodEnd) {
+      if (input.cancelAtPeriodEnd && !input.force) {
         invalid(
           status,
           action,

@@ -18,6 +18,7 @@ const SubscriptionDetailPage = lazy(() => import("@/pages/SubscriptionDetailPage
 const InvoicesPage = lazy(() => import("@/pages/InvoicesPage"));
 const InvoiceDetailPage = lazy(() => import("@/pages/InvoiceDetailPage"));
 const InvoicePrintPage = lazy(() => import("@/pages/InvoicePrintPage"));
+const AutomationPage = lazy(() => import("@/pages/AutomationPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
 
@@ -56,6 +57,7 @@ export function App() {
           />
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/:invoiceId" element={<InvoiceDetailPage />} />
+          <Route path="automation" element={<AutomationPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

@@ -151,6 +151,17 @@ describe("subscription lifecycle", () => {
       advancePeriod: false,
       activityType: "CANCELED",
     });
+    expect(
+      transition("ACTIVE", "cancel", {
+        atPeriodEnd: false,
+        cancelAtPeriodEnd: true,
+        force: true,
+      }),
+    ).toMatchObject({
+      status: "CANCELED",
+      cancelAtPeriodEnd: false,
+      activityType: "CANCELED",
+    });
     expect(() => transition("CANCELED", "cancel")).toThrow(
       InvalidSubscriptionTransitionError,
     );
