@@ -340,6 +340,9 @@ model Subscription {
   @@index([organizationId, status])
   @@index([organizationId, customerId])
   @@index([organizationId, currentPeriodEnd])
+  @@index([organizationId, startedAt])
+  @@index([organizationId, endedAt])
+  @@index([organizationId, canceledAt])
   @@index([customerId])
   @@index([planId])
   @@map("subscriptions")
@@ -418,6 +421,8 @@ model Invoice {
   @@index([organizationId, customerId])
   @@index([organizationId, createdAt])
   @@index([organizationId, periodEnd])
+  @@index([organizationId, issuedAt])
+  @@index([organizationId, dueAt])
   @@index([customerId])
   @@index([subscriptionId])
   @@map("invoices")
@@ -489,6 +494,8 @@ model Payment {
   @@index([organizationId, invoiceId, createdAt])
   @@index([organizationId, status])
   @@index([organizationId, gatewayPaymentId])
+  @@index([organizationId, paidAt])
+  @@index([organizationId, refundedAt])
   @@index([invoiceId])
   @@map("payments")
 }
@@ -517,6 +524,7 @@ model PaymentRefund {
   @@unique([provider, providerRefundId])
   @@index([organizationId, paymentId, createdAt])
   @@index([organizationId, invoiceId, createdAt])
+  @@index([organizationId, processedAt])
   @@map("payment_refunds")
 }
 

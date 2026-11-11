@@ -1,5 +1,15 @@
 import { API_PATHS } from "@subscript/shared";
 import type {
+  AnalyticsChurnResponse,
+  AnalyticsCustomersResponse,
+  AnalyticsDetailParams,
+  AnalyticsInvoicesResponse,
+  AnalyticsMrrResponse,
+  AnalyticsOverviewResponse,
+  AnalyticsPlansResponse,
+  AnalyticsRangeParams,
+  AnalyticsRevenueResponse,
+  AnalyticsSubscriptionGrowthResponse,
   ApiErrorCode,
   ApiErrorResponse,
   ApiFieldIssue,
@@ -671,6 +681,143 @@ export async function dispatchAutomationOutbox(): Promise<AutomationDispatchResp
     API_PATHS.automationDispatch,
     { method: "POST" },
   );
+}
+
+function analyticsQuery(
+  params: AnalyticsRangeParams | AnalyticsDetailParams,
+): string {
+  return buildQuery({
+    from: params.from,
+    to: params.to,
+    timezone: params.timezone,
+    grouping: params.grouping,
+    page: "page" in params ? params.page : undefined,
+    pageSize: "pageSize" in params ? params.pageSize : undefined,
+  });
+}
+
+export async function getAnalyticsOverview(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsOverviewResponse> {
+  return requestJson<AnalyticsOverviewResponse>(
+    `${API_PATHS.analyticsOverview}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsRevenue(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsRevenueResponse> {
+  return requestJson<AnalyticsRevenueResponse>(
+    `${API_PATHS.analyticsRevenue}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsMrr(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsMrrResponse> {
+  return requestJson<AnalyticsMrrResponse>(
+    `${API_PATHS.analyticsMrr}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsSubscriptions(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsSubscriptionGrowthResponse> {
+  return requestJson<AnalyticsSubscriptionGrowthResponse>(
+    `${API_PATHS.analyticsSubscriptions}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsChurn(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsChurnResponse> {
+  return requestJson<AnalyticsChurnResponse>(
+    `${API_PATHS.analyticsChurn}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsCustomers(
+  params: AnalyticsDetailParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsCustomersResponse> {
+  return requestJson<AnalyticsCustomersResponse>(
+    `${API_PATHS.analyticsCustomers}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsPlans(
+  params: AnalyticsDetailParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsPlansResponse> {
+  return requestJson<AnalyticsPlansResponse>(
+    `${API_PATHS.analyticsPlans}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export async function getAnalyticsInvoices(
+  params: AnalyticsRangeParams = {},
+  signal?: AbortSignal,
+): Promise<AnalyticsInvoicesResponse> {
+  return requestJson<AnalyticsInvoicesResponse>(
+    `${API_PATHS.analyticsInvoices}${analyticsQuery(params)}`,
+    { signal },
+  );
+}
+
+export interface AnalyticsCsvDownload {
+  filename: string;
+  text: string;
+}
+
+function filenameFromDisposition(
+  disposition: string | null,
+  fallback: string,
+): string {
+  if (!disposition) {
+    return fallback;
+  }
+
+  const match = /filename="?(?<name>[^";]+)"?/i.exec(disposition);
+  return match?.groups?.name ?? fallback;
+}
+
+export async function fetchAnalyticsCsv(
+  path: string,
+  params: AnalyticsRangeParams = {},
+  fallbackFilename = "analytics.csv",
+): Promise<AnalyticsCsvDownload> {
+  const response = await fetch(
+    `${API_BASE_URL}${path}${analyticsQuery(params)}`,
+    {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "text/csv" },
+    },
+  );
+
+  if (!response.ok) {
+    return rejectWithApiError(response);
+  }
+
+  return {
+    filename: filenameFromDisposition(
+      response.headers.get("content-disposition"),
+      fallbackFilename,
+    ),
+    text: await response.text(),
+  };
 }
 
 function isHealthResponse(value: unknown): value is HealthResponse {

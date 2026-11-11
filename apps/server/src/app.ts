@@ -3,6 +3,9 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
 import { API_PATHS } from "@subscript/shared";
+import { createAnalyticsRouter } from "./analytics/router.js";
+import { createMemoryAnalyticsStore } from "./analytics/store/memory.js";
+import type { AnalyticsStore } from "./analytics/types.js";
 import type { AuthService } from "./auth/service.js";
 import { SESSION_COOKIE_NAME } from "./auth/session-token.js";
 import { createAutomationRouter } from "./automation/router.js";
@@ -58,6 +61,7 @@ export interface AppOptions {
   planStore: PlanStore;
   subscriptionStore: SubscriptionStore;
   invoiceStore: InvoiceStore;
+  analyticsStore?: AnalyticsStore | undefined;
   gateway?: PaymentGateway | null;
   gatewayWebhookStore?: GatewayWebhookStore;
   automation?: AutomationAppOptions | null;
@@ -113,6 +117,14 @@ export function createApp(options: AppOptions): Express {
     invoiceStore: options.invoiceStore,
     webhookStore: gatewayWebhookStore,
   });
+  const analyticsStore =
+    options.analyticsStore ??
+    createMemoryAnalyticsStore({
+      customerStore: options.customerStore,
+      planStore: options.planStore,
+      subscriptionStore: options.subscriptionStore,
+      invoiceStore: options.invoiceStore,
+    });
   const cookie = {
     name: cookieName,
     secure: cookieSecure,
@@ -210,6 +222,14 @@ export function createApp(options: AppOptions): Express {
       authenticate,
       requireOrganization,
       requireAdmin: requireRole("OWNER", "ADMIN"),
+    }),
+  );
+
+  app.use(
+    createAnalyticsRouter({
+      analyticsStore,
+      authenticate,
+      requireOrganization,
     }),
   );
 

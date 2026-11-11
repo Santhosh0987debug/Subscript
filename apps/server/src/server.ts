@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
+import { createPrismaAnalyticsStore } from "./analytics/store/prisma.js";
 import { createMemoryAutomationCandidateSource } from "./automation/candidates/memory.js";
 import { createPrismaAutomationCandidateSource } from "./automation/candidates/prisma.js";
 import { createEmailProvider } from "./automation/notifications/provider.js";
@@ -72,6 +73,9 @@ function startServer(): void {
   const gatewayWebhookStore = prisma
     ? createPrismaGatewayWebhookStore(prisma)
     : createMemoryGatewayWebhookStore();
+  const analyticsStore = prisma
+    ? createPrismaAnalyticsStore(prisma)
+    : undefined;
   const gateway = env.razorpay
     ? createRazorpayGateway({
         keyId: env.razorpay.keyId,
@@ -165,6 +169,7 @@ function startServer(): void {
     planStore,
     subscriptionStore,
     invoiceStore,
+    analyticsStore,
     gateway,
     gatewayWebhookStore,
     automation: {

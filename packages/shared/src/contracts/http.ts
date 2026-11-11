@@ -79,6 +79,16 @@ export const API_PATHS = {
   automationNotificationRetry: (notificationId: string) =>
     `/api/automation/notifications/${encodeURIComponent(notificationId)}/retry`,
   automationDispatch: "/api/automation/dispatch",
+  analyticsOverview: "/api/analytics/overview",
+  analyticsRevenue: "/api/analytics/revenue",
+  analyticsMrr: "/api/analytics/mrr",
+  analyticsSubscriptions: "/api/analytics/subscriptions",
+  analyticsChurn: "/api/analytics/churn",
+  analyticsCustomers: "/api/analytics/customers",
+  analyticsPlans: "/api/analytics/plans",
+  analyticsInvoices: "/api/analytics/invoices",
+  analyticsRevenueCsv: "/api/analytics/reports/revenue.csv",
+  analyticsSubscriptionsCsv: "/api/analytics/reports/subscriptions.csv",
 } as const;
 
 /**

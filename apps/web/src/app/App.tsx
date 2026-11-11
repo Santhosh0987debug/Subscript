@@ -6,6 +6,7 @@ import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
+const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
 const CustomersPage = lazy(() => import("@/pages/CustomersPage"));
 const CustomerDetailPage = lazy(() => import("@/pages/CustomerDetailPage"));
 const CustomerFormPage = lazy(() => import("@/pages/CustomerFormPage"));
@@ -38,6 +39,7 @@ export function App() {
 
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />
+          <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="customers" element={<CustomersPage />} />
           <Route path="customers/new" element={<CustomerFormPage />} />
           <Route path="customers/:customerId" element={<CustomerDetailPage />} />

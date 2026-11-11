@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   CreditCard,
   LayoutDashboard,
   Layers,
@@ -17,6 +18,7 @@ export interface NavigationItem {
 
 export const primaryNavigation: readonly NavigationItem[] = [
   { label: "Overview", to: "/", icon: LayoutDashboard },
+  { label: "Analytics", to: "/analytics", icon: BarChart3 },
   { label: "Customers", to: "/customers", icon: Users },
   { label: "Plans", to: "/plans", icon: Layers },
   { label: "Subscriptions", to: "/subscriptions", icon: CreditCard },
