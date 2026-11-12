@@ -45,7 +45,10 @@ export const loginSchema = z
     password: z
       .string()
       .min(1, "Enter your password.")
-      .max(72, "Use at most 72 characters."),
+      .max(72, "Use at most 72 characters.")
+      .refine((value) => Buffer.byteLength(value, "utf8") <= 72, {
+        message: "Password must be at most 72 bytes.",
+      }),
   })
   .strict();
 

@@ -41,6 +41,7 @@ import type { GatewayWebhookStore } from "../../src/gateway/webhook-store.js";
 import {
   createMemoryGatewayWebhookStore,
 } from "../../src/gateway/store/memory.js";
+import type { ReadinessOptions } from "../../src/routes/health.js";
 
 export const TEST_ORIGIN = "http://localhost:5173";
 export const TEST_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -79,9 +80,11 @@ export interface TestApp {
 
 export interface TestAppOptions {
   authRateLimit?: RateLimitOptions | false;
+  apiRateLimit?: RateLimitOptions | false;
   gatewayRateLimit?: RateLimitOptions | false;
   webhookRateLimit?: RateLimitOptions | false;
   cookieSecure?: boolean;
+  cookieName?: string;
   sessionTtlMs?: number;
   gateway?: PaymentGateway | null;
   gatewayWebhookStore?: GatewayWebhookStore;
@@ -89,6 +92,9 @@ export interface TestAppOptions {
   automationDispatcher?: AutomationJobDispatcher | null;
   notificationDispatcher?: NotificationDispatcher | null;
   emailProvider?: EmailProvider;
+  logRequests?: boolean;
+  metricsToken?: string | null;
+  readiness?: ReadinessOptions;
 }
 
 export function createTestApp(options: TestAppOptions = {}): TestApp {
@@ -163,11 +169,16 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
       renewalWindowDays: automationDefaults.renewalReminderWindowDays,
     },
     corsOrigins: [TEST_ORIGIN],
+    ...(options.cookieName ? { cookieName: options.cookieName } : {}),
     cookieSecure: options.cookieSecure ?? false,
     sessionTtlMs,
     authRateLimit: options.authRateLimit ?? false,
+    apiRateLimit: options.apiRateLimit ?? false,
     gatewayRateLimit: options.gatewayRateLimit ?? false,
     webhookRateLimit: options.webhookRateLimit ?? false,
+    logRequests: options.logRequests ?? false,
+    metricsToken: options.metricsToken ?? null,
+    ...(options.readiness ? { readiness: options.readiness } : {}),
   });
 
   return {

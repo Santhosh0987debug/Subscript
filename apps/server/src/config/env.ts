@@ -45,6 +45,20 @@ export interface AutomationEnv {
   notificationRetryMaxMs: number;
 }
 
+export interface DatabasePoolEnv {
+  poolMax: number;
+  idleTimeoutMs: number;
+  connectionTimeoutMs: number;
+  statementTimeoutMs: number;
+}
+
+export interface HttpServerEnv {
+  requestTimeoutMs: number;
+  headersTimeoutMs: number;
+  keepAliveTimeoutMs: number;
+  shutdownTimeoutMs: number;
+}
+
 export interface ServerEnv {
   nodeEnv: NodeEnvironment;
   port: number;
@@ -53,11 +67,17 @@ export interface ServerEnv {
   sessionTtlMs: number;
   bcryptCost: number;
   cookieSecure: boolean;
+  cookieName: string;
   trustProxy: boolean;
   razorpay: RazorpayEnv | null;
   redisUrl: string | null;
   smtp: SmtpEnv | null;
   emailFrom: string;
+  database: DatabasePoolEnv;
+  http: HttpServerEnv;
+  apiRateLimit: { windowMs: number; limit: number };
+  metricsToken: string | null;
+  logRequests: boolean;
   automation: AutomationEnv;
 }
 
@@ -71,7 +91,24 @@ const envSchema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(30).default(7),
   BCRYPT_COST: z.coerce.number().int().min(10).max(14).default(12),
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  SESSION_COOKIE_NAME: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{1,64}$/)
+    .optional(),
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),
+  API_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  API_RATE_LIMIT_MAX: z.coerce.number().int().min(30).max(100_000).default(600),
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  DB_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
+  DB_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(15_000),
+  HTTP_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
+  HTTP_HEADERS_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(65_000),
+  HTTP_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(5_000),
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
+  METRICS_TOKEN: z.string().trim().min(16).max(200).optional(),
+  LOG_REQUESTS: z.enum(["true", "false"]).default("true"),
   RAZORPAY_KEY_ID: z.string().trim().optional(),
   RAZORPAY_KEY_SECRET: z.string().trim().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().trim().optional(),
@@ -202,7 +239,20 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     SESSION_TTL_DAYS: sessionTtlDays,
     BCRYPT_COST: bcryptCost,
     COOKIE_SECURE,
+    SESSION_COOKIE_NAME,
     TRUST_PROXY,
+    API_RATE_LIMIT_WINDOW_SECONDS,
+    API_RATE_LIMIT_MAX,
+    DB_POOL_MAX,
+    DB_IDLE_TIMEOUT_MS,
+    DB_CONNECTION_TIMEOUT_MS,
+    DB_STATEMENT_TIMEOUT_MS,
+    HTTP_REQUEST_TIMEOUT_MS,
+    HTTP_HEADERS_TIMEOUT_MS,
+    HTTP_KEEP_ALIVE_TIMEOUT_MS,
+    SHUTDOWN_TIMEOUT_MS,
+    METRICS_TOKEN,
+    LOG_REQUESTS,
     RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET,
     RAZORPAY_WEBHOOK_SECRET,
@@ -237,6 +287,35 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
   const issues: string[] = [];
   const databaseUrl = DATABASE_URL && DATABASE_URL.length > 0 ? DATABASE_URL : null;
   const cookieSecure = COOKIE_SECURE ? COOKIE_SECURE === "true" : nodeEnv === "production";
+  const defaultCookieName =
+    nodeEnv === "production" && cookieSecure
+      ? "__Host-subscript_session"
+      : "subscript_session";
+  const cookieName = SESSION_COOKIE_NAME ?? defaultCookieName;
+
+  if (nodeEnv === "production" && !cookieSecure) {
+    issues.push(
+      "COOKIE_SECURE: must be true in production; serve the API over HTTPS",
+    );
+  }
+
+  if (cookieName.startsWith("__Host-") && !cookieSecure) {
+    issues.push(
+      "SESSION_COOKIE_NAME: __Host- cookies require COOKIE_SECURE=true",
+    );
+  }
+
+  if (cookieName.startsWith("__Secure-") && !cookieSecure) {
+    issues.push(
+      "SESSION_COOKIE_NAME: __Secure- cookies require COOKIE_SECURE=true",
+    );
+  }
+
+  if (HTTP_HEADERS_TIMEOUT_MS <= HTTP_KEEP_ALIVE_TIMEOUT_MS) {
+    issues.push(
+      "HTTP_HEADERS_TIMEOUT_MS: must be greater than HTTP_KEEP_ALIVE_TIMEOUT_MS",
+    );
+  }
 
   if (databaseUrl && !isPostgresUrl(databaseUrl)) {
     issues.push("DATABASE_URL: must use the postgresql:// or postgres:// protocol");
@@ -270,6 +349,12 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
 
     if (!normalizedOrigins.includes(origin)) {
       normalizedOrigins.push(origin);
+    }
+
+    if (nodeEnv === "production" && new URL(origin).protocol !== "https:") {
+      issues.push(
+        `CORS_ORIGINS: "${rawOrigin}" must use https in production`,
+      );
     }
   }
 
@@ -410,11 +495,31 @@ export function parseEnv(source: EnvSource = process.env): ServerEnv {
     sessionTtlMs: sessionTtlDays * 24 * 60 * 60 * 1000,
     bcryptCost,
     cookieSecure,
+    cookieName,
     trustProxy: TRUST_PROXY === "true",
     razorpay,
     redisUrl,
     smtp,
     emailFrom,
+    database: {
+      poolMax: DB_POOL_MAX,
+      idleTimeoutMs: DB_IDLE_TIMEOUT_MS,
+      connectionTimeoutMs: DB_CONNECTION_TIMEOUT_MS,
+      statementTimeoutMs: DB_STATEMENT_TIMEOUT_MS,
+    },
+    http: {
+      requestTimeoutMs: HTTP_REQUEST_TIMEOUT_MS,
+      headersTimeoutMs: HTTP_HEADERS_TIMEOUT_MS,
+      keepAliveTimeoutMs: HTTP_KEEP_ALIVE_TIMEOUT_MS,
+      shutdownTimeoutMs: SHUTDOWN_TIMEOUT_MS,
+    },
+    apiRateLimit: {
+      windowMs: API_RATE_LIMIT_WINDOW_SECONDS * 1_000,
+      limit: API_RATE_LIMIT_MAX,
+    },
+    metricsToken:
+      METRICS_TOKEN && METRICS_TOKEN.length > 0 ? METRICS_TOKEN : null,
+    logRequests: LOG_REQUESTS === "true",
     automation: {
       queuePrefix: AUTOMATION_QUEUE_PREFIX,
       billingConcurrency: AUTOMATION_BILLING_CONCURRENCY,

@@ -80,8 +80,8 @@ export function AppShell() {
         </main>
 
         <footer className="mx-auto flex w-full max-w-[1480px] flex-col gap-1.5 px-4 pb-6 pt-2 font-mono text-[8.5px] uppercase tracking-[0.14em] text-muted/70 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-9 xl:px-12">
-          <p>Subscript · Phase 2 workspace</p>
-          <p>Illustrative revenue data · Authenticated session</p>
+          <p>Subscript · Revenue operations</p>
+          <p>Live workspace data · Authenticated session</p>
         </footer>
       </div>
     </>

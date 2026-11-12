@@ -18,6 +18,8 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "npm run db:generate && npm run build -w @subscript/shared && npm run typecheck -w @subscript/web && npm run typecheck -w @subscript/server && npm run typecheck -w @subscript/shared",
     "test": "npm run build -w @subscript/shared && npm run test -w @subscript/server && npm run test -w @subscript/web",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "db:generate": "npm run db:generate -w @subscript/server",
     "db:validate": "npm run db:validate -w @subscript/server",
     "db:migrate": "npm run db:migrate -w @subscript/server",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.0",
     "concurrently": "^10.0.6",
     "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "^7.1.1",

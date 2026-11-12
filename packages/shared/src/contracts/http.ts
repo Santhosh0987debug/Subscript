@@ -3,6 +3,8 @@
  */
 export const API_PATHS = {
   health: "/api/health",
+  ready: "/api/ready",
+  metrics: "/api/metrics",
   authRegister: "/api/auth/register",
   authLogin: "/api/auth/login",
   authLogout: "/api/auth/logout",
@@ -128,4 +130,24 @@ export interface HealthResponse {
   version: string;
   timestamp: string;
   uptimeSeconds: number;
+}
+
+export type ReadinessStatus = "ok" | "degraded" | "error";
+
+export type ReadinessCheckStatus = "ok" | "degraded" | "error" | "skipped";
+
+export interface ReadinessCheck {
+  name: string;
+  status: ReadinessCheckStatus;
+  latencyMs: number | null;
+  message?: string;
+}
+
+export interface ReadyResponse {
+  status: ReadinessStatus;
+  service: "subscript-api";
+  version: string;
+  timestamp: string;
+  uptimeSeconds: number;
+  checks: ReadinessCheck[];
 }

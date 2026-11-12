@@ -1,8 +1,8 @@
 # Subscript
 
-Subscript is a multi-tenant subscription and revenue management platform. Phase 6 adds durable background automation: Redis + BullMQ workers schedule renewals, trial conversion, recurring invoices, period-end cancellation, status synchronization, payment recovery reminders, and notification delivery with bounded retries and an operations console. Phase 5 added Razorpay online payments behind a provider-independent gateway: checkout for open invoices, signed webhook reconciliation, and full or partial refunds alongside the existing manual payment records.
+Subscript is a multi-tenant subscription and revenue management platform. Phase 8 hardens the production path: strict production cookie and CORS validation, global and per-route rate limits, origin checks, security headers, structured redacting logs, request/correlation IDs, Prometheus metrics, liveness/readiness endpoints, bounded database pools and timeouts, graceful shutdown, Docker images, GitHub Actions CI, Playwright browser flows, and Vercel/Render deployment configuration. Phase 7 added live revenue analytics. Phase 6 added durable Redis + BullMQ automation. Phase 5 added Razorpay online payments behind a provider-independent gateway.
 
-Authentication, sessions, organization membership, customers, plans, subscriptions, invoices, payments, gateway transactions, and automation jobs are live and enforced by the API. The revenue dashboard still uses illustrative data.
+Authentication, sessions, organization membership, customers, plans, subscriptions, invoices, payments, gateway transactions, automation jobs, and revenue analytics are live and enforced by the API. Customer, plan, billing, operations, and analytics pages use live API records.
 
 ## Payment scope
 
@@ -54,54 +54,65 @@ With no Razorpay credentials, the gateway is disabled and only manual recording 
 - Operations page for queue/worker health, upcoming renewals, job execution history, notification history, and owner/admin retry and dispatch controls
 - Transactional outbox behavior, per-job atomic claims, stale running/queued recovery, crash-safe reprocessing, and structured job logs without raw payloads or secrets
 - Auth rate limiting, strict request validation, an Origin guard for unsafe methods, and a consistent API error envelope
-- Web tests for form validation, identity helpers, and billing helpers; API tests for billing math, lifecycle transitions, invoices, payments, concurrency, tenancy, roles, auth, rate limiting, automation scheduling, retries, and notification deduplication
+- Live revenue analytics: MRR/ARR, cash revenue, churn, subscription growth, plan and customer reports, and CSV exports, with integer minor units grouped by currency and ratios in basis points
+- Production hardening: global API rate limits, `Origin: null` and cross-site rejection, Helmet headers, `__Host-` session cookie, `no-store` API responses, and JSON escaping
+- Observability: structured JSON logs with request/correlation IDs and sensitive-value redaction, Prometheus metrics, liveness and readiness endpoints, and optional token-protected scraping
+- Database resilience: bounded connection pool, idle/connection/statement timeouts, UTC sessions, additive indexes for worker recovery, and safe multiplexing across API/worker replicas
+- Independent worker process with heartbeats, stale job/notification recovery, bounded retries, graceful shutdown, and Redis-degraded API behavior
+- Container images for the API/worker and nginx-served web app, plus Vercel and Render deployment configuration
+- Playwright browser flows for auth, tenancy, and the full revenue workflow; PostgreSQL/Redis integration tests; GitHub Actions CI
+- Web tests for form validation, identity helpers, and billing helpers; API tests for billing math, lifecycle transitions, invoices, payments, concurrency, tenancy, roles, auth, rate limiting, automation scheduling, retries, notification deduplication, analytics, health/readiness, and security hardening
 
 ## Structure
 
 ```text
 subscript/
 ├── apps/
-│   ├── web/                    React dashboard
+│   ├── web/                       React SPA (Vite, Tailwind)
 │   │   ├── public/
 │   │   └── src/
-│   │       ├── app/            Router and error boundary
-│   │       ├── auth/           Auth context, route guards, form validation
-│   │       ├── components/
-│   │       │   ├── auth/       Auth layout and session status screens
-│   │       │   ├── dashboard/  Metrics, chart, activity, renewals
-│   │       │   ├── layout/     Sidebar, topbar, workspace switcher, shell
-│   │       │   └── ui/         Buttons, cards, badges, fields, states
-│   │       ├── data/           Illustrative revenue data
+│   │       ├── app/               Router and error boundary
+│   │       ├── auth/              Auth context, route guards, validation
+│   │       ├── components/        Auth, dashboard, layout, UI
 │   │       ├── hooks/
-│   │       ├── lib/            API client, billing helpers, validation, money
-│   │       ├── pages/          Customers, plans, subscriptions, invoices, print
+│   │       ├── lib/               API client, billing, analytics, money
+│   │       ├── pages/             Customers, plans, billing, analytics, print
 │   │       └── styles/
-│   └── server/                 Express API
+│   └── server/                    Express API and worker
 │       ├── prisma/
-│       │   ├── migrations/     Auth, catalogue, and billing migrations
+│       │   ├── migrations/        Seven committed migrations
 │       │   └── schema.prisma
 │       ├── src/
-│       │   ├── auth/           Service, stores, password/session helpers
-│       │   ├── billing/        Centralized lifecycle state machines and errors
-│       │   ├── config/         Environment validation
-│       │   ├── customers/      Validation, stores, serializer, router
-│       │   ├── db/             Prisma client factory
+│       │   ├── analytics/         Revenue calculations, stores, CSV
+│       │   ├── auth/              Service, stores, password/session helpers
+│       │   ├── automation/        Durable jobs, queues, workers, notifications
+│       │   ├── billing/           Lifecycle state machines and errors
+│       │   ├── config/            Environment validation
+│       │   ├── customers/         Validation, stores, serializer, router
+│       │   ├── db/                Prisma client factory and pool options
 │       │   ├── errors/
-│       │   ├── gateway/        Provider-neutral gateway, Razorpay adapter, webhook reconciliation
-│       │   ├── invoices/       Invoice/payment validation, stores, router
-│       │   ├── lib/
-│       │   ├── middleware/     Auth, tenancy, roles, rate limits, errors
-│       │   ├── plans/          Validation, stores, serializer, router
-│       │   ├── routes/
-│       │   ├── subscriptions/  Validation, stores, serializer, router
+│       │   ├── gateway/           Razorpay adapter, checkout, webhook reconciliation
+│       │   ├── invoices/          Invoice/payment validation, stores, router
+│       │   ├── lib/               Logger, metrics, validation
+│       │   ├── middleware/        Auth, tenancy, roles, rate limits, errors
+│       │   ├── plans/             Validation, stores, serializer, router
+│       │   ├── routes/            Auth, organizations, health, readiness, metrics
+│       │   ├── subscriptions/     Validation, stores, serializer, router
 │       │   ├── types/
 │       │   ├── app.ts
-│       │   └── server.ts
-│       └── tests/
-├── packages/
-│   └── shared/                 Shared types and contracts
-├── compose.yaml                Optional local PostgreSQL
-└── package.json                Workspace scripts
+│       │   ├── server.ts
+│       │   └── worker.ts          Independent BullMQ worker
+│       └── tests/                 Vitest unit, API, and integration tests
+├── e2e/                           Playwright browser flows
+├── packages/shared/               Shared types and contracts
+├── docs/                          Architecture, deployment, operations, security
+├── .github/workflows/ci.yml       CI: verify, integration, E2E
+├── apps/server/Dockerfile         API + worker image
+├── apps/web/Dockerfile            nginx static image
+├── render.yaml                    Render Blueprint
+├── vercel.json                    Vercel web configuration
+├── compose.yaml                   Local PostgreSQL + Redis
+└── package.json                   Workspace scripts
 ```
 
 ## Prerequisites
@@ -199,6 +210,8 @@ Start the API in a second terminal with `npm run start -w @subscript/server` aft
 
 ## Environment
 
+The canonical reference, including validation ranges and production examples, is [docs/configuration.md](docs/configuration.md).
+
 ### Server (`apps/server/.env`)
 
 | Variable | Required | Default | Notes |
@@ -210,6 +223,7 @@ Start the API in a second terminal with `npm run start -w @subscript/server` aft
 | `SESSION_TTL_DAYS` | No | `7` | Validated 1-30 days |
 | `BCRYPT_COST` | No | `12` | Validated 10-14 |
 | `COOKIE_SECURE` | No | `true` in production, `false` otherwise | Set explicitly when terminating TLS elsewhere |
+| `SESSION_COOKIE_NAME` | No | `__Host-subscript_session` in production, `subscript_session` otherwise | `__Host-` and `__Secure-` prefixes require secure cookies |
 | `TRUST_PROXY` | No | `false` | Set to `true` only behind a trusted reverse proxy |
 | `RAZORPAY_KEY_ID` | Gateway | — | Test or live publishable key; must start with `rzp_test_` or `rzp_live_` |
 | `RAZORPAY_KEY_SECRET` | Gateway | — | Secret API key; never exposed to the browser or logs |
@@ -242,6 +256,23 @@ Start the API in a second terminal with `npm run start -w @subscript/server` aft
 | `SMTP_USER` | No | — | Must be supplied with `SMTP_PASSWORD` |
 | `SMTP_PASSWORD` | No | — | Never logged or returned by the API |
 
+Production hardening, observability, and server limits:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `API_RATE_LIMIT_WINDOW_SECONDS` | `60` | Global `/api` limiter window (10-3600) |
+| `API_RATE_LIMIT_MAX` | `600` | Requests per window per client (30-100000) |
+| `DB_POOL_MAX` | `10` | PostgreSQL pool size per API/worker process |
+| `DB_IDLE_TIMEOUT_MS` | `30000` | Idle connection timeout |
+| `DB_CONNECTION_TIMEOUT_MS` | `5000` | Time to acquire a pooled connection |
+| `DB_STATEMENT_TIMEOUT_MS` | `15000` | Server-side per-query timeout |
+| `HTTP_REQUEST_TIMEOUT_MS` | `60000` | Whole-request timeout |
+| `HTTP_HEADERS_TIMEOUT_MS` | `65000` | Must exceed keep-alive |
+| `HTTP_KEEP_ALIVE_TIMEOUT_MS` | `5000` | Keep-alive idle timeout |
+| `SHUTDOWN_TIMEOUT_MS` | `15000` | Graceful shutdown budget |
+| `METRICS_TOKEN` | — | 16-200 characters; hides `/api/metrics` when unset |
+| `LOG_REQUESTS` | `true` | Structured access logs; operational endpoints excluded |
+
 Razorpay variables must be supplied together. Leaving all three unset disables online checkout. Live keys are rejected unless `NODE_ENV=production`; Test Mode is the default for local development.
 
 Environment validation fails fast at API startup with readable issues. Internal error details are logged but never returned to clients.
@@ -256,6 +287,9 @@ Environment validation fails fast at API startup with readable issues. Internal 
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/health` | Liveness: process, version, uptime |
+| `GET` | `/api/ready` | Readiness: PostgreSQL required, Redis optional/degraded; `503` only when the database is unavailable |
+| `GET` | `/api/metrics` | Prometheus metrics; hidden without `METRICS_TOKEN`, otherwise requires `Authorization: Bearer <token>` |
 | `POST` | `/api/auth/register` | Create a user, first organization, owner membership, and session |
 | `POST` | `/api/auth/login` | Verify credentials and issue a fresh session |
 | `POST` | `/api/auth/logout` | Revoke the current session and clear the cookie |
@@ -309,7 +343,7 @@ Environment validation fails fast at API startup with readable issues. Internal 
 | `POST` | `/api/automation/notifications/:notificationId/retry` | Retry a failed or dead-letter notification (owner or admin) |
 | `POST` | `/api/automation/dispatch` | Dispatch due durable jobs and notifications to BullMQ (owner or admin) |
 
-Successful auth responses set the `subscript_session` cookie and use `Cache-Control: no-store`. The raw token exists only in the cookie; JSON responses never contain session tokens or password hashes.
+Successful auth responses set the `subscript_session` cookie (or `__Host-subscript_session` in production) and use `Cache-Control: no-store`. The raw token exists only in the cookie; JSON responses never contain session tokens or password hashes.
 
 Errors use one envelope:
 
@@ -324,7 +358,7 @@ Errors use one envelope:
 }
 ```
 
-Every response carries an `X-Request-Id`.
+Every response carries an `X-Request-Id` and, when supplied by the caller, an `X-Correlation-Id`.
 
 ## Billing engine
 
@@ -421,9 +455,12 @@ Templates render organization, customer, plan, invoice, amount, period, and retr
 
 - Passwords are hashed with bcrypt at cost 12 by default; login compares against a dummy hash for unknown emails to reduce timing differences.
 - A session token is 32 random bytes. Only its SHA-256 hash is stored in the database; the browser receives the raw token in an HttpOnly cookie.
-- Cookies use `SameSite=Lax`, `Path=/`, `HttpOnly`, and `Secure` in production. There is no token access from JavaScript or browser storage.
-- Auth endpoints are rate limited (default 20 failed attempts per 15 minutes per client), with successful requests excluded.
-- Unsafe HTTP methods reject disallowed `Origin` headers, adding CSRF protection beyond CORS while still allowing non-browser clients that omit the header.
+- Cookies use `SameSite=Lax`, `Path=/`, `HttpOnly`, and `Secure` in production; production defaults to the `__Host-subscript_session` name and sets `Priority=High`. There is no token access from JavaScript or browser storage.
+- Auth endpoints are rate limited (default 20 failed attempts per 15 minutes per client), with successful requests excluded. A global `/api` limiter (default 600/minute) protects the rest of the API; health, readiness, and metrics remain outside it.
+- Unsafe HTTP methods reject disallowed `Origin` headers, `Origin: null`, and `Sec-Fetch-Site: cross-site`, adding CSRF protection beyond CORS while still allowing non-browser clients that omit the header.
+- Helmet sets security headers; HSTS is enabled in production. The API disables `X-Powered-By` and ETags, sets `Cache-Control: no-store` on API responses, and escapes HTML-sensitive characters in JSON.
+- CSV exports neutralize spreadsheet formulas, and analytics raw SQL uses parameterized `Prisma.sql` with static identifiers.
+- Request and correlation IDs are length- and character-validated; unsafe caller values are replaced rather than reflected.
 - Every protected organization operation resolves the session from the database and revalidates that the user still belongs to the active organization.
 - Organization renaming requires `OWNER` or `ADMIN`; members receive `403`.
 - Customer, plan, subscription, invoice, and payment mutations require `OWNER` or `ADMIN`; members retain read access.
@@ -439,6 +476,10 @@ Templates render organization, customer, plan, invoice, amount, period, and retr
 - Worker heartbeats and queue health checks are read-only and never expose Redis credentials or raw queue data.
 - Cross-tenant switches return `403` and leave the session's active organization unchanged.
 - Password hashes, session tokens, and other secrets are never included in API responses.
+- Logs are structured JSON with request/correlation IDs; emails, bearer tokens, Razorpay keys, and long tokens are redacted, sensitive object keys become `[redacted]`, and stacks are omitted in production.
+- `/api/metrics` is hidden unless `METRICS_TOKEN` is configured and compares bearer tokens in constant time.
+- PostgreSQL uses a bounded pool and `statement_timeout`; HTTP request, headers, keep-alive, and shutdown budgets are explicit.
+- `npm audit` reports no critical or high vulnerabilities; the moderate findings are development-only lint tooling. See [docs/security.md](docs/security.md) for the full audit and residual risks.
 
 ## Data model
 
@@ -461,7 +502,7 @@ The Prisma schema defines organization-scoped core entities:
 
 All money is stored as integer minor units and paired with an explicit currency code, so currencies without two decimal places (for example JPY) remain correct. API contracts use the same integer representation. Database check constraints keep quantities positive and monetary values non-negative, and unique indexes protect invoice numbering, billing-period idempotency, provider order/payment IDs, and webhook event IDs.
 
-Committed migrations cover the auth core, the customer/plan catalogue, the subscription billing engine, the payment gateway, and background automation. Apply them with `npm run db:deploy` in production.
+Committed migrations cover the auth core, the customer/plan catalogue, the subscription billing engine, the payment gateway, background automation, analytics indexes, and production-hardening recovery indexes. Apply them with `npm run db:deploy` in production.
 
 ## Scripts
 
@@ -473,12 +514,15 @@ Committed migrations cover the auth core, the customer/plan catalogue, the subsc
 | `npm run lint` | ESLint across the monorepo |
 | `npm run typecheck` | Generate Prisma client and typecheck all workspaces |
 | `npm test` | Run server and web tests |
+| `npm run test:e2e` | Run Playwright browser flows (builds and starts both apps) |
+| `npm run test:e2e:headed` | Run Playwright flows with a visible browser |
 | `npm run db:generate` | Generate Prisma Client |
 | `npm run db:validate` | Validate the Prisma schema |
 | `npm run db:migrate` | Create/apply a development migration |
 | `npm run db:deploy` | Apply committed migrations in production |
 | `npm run db:studio` | Open Prisma Studio |
 | `npm run start:worker -w @subscript/server` | Run the compiled worker (`dist/worker.js`) |
+| `npm run start -w @subscript/server` | Run the compiled API (`dist/server.js`) |
 
 Shared types are built to `packages/shared/dist` before app dev/build. After changing a shared contract, restart `npm run dev` so both apps pick up the new build.
 
@@ -490,13 +534,14 @@ npm run typecheck
 npm test
 npm run build
 npm run db:validate
+npm run test:e2e
 ```
 
-The billing suite includes PostgreSQL-only integration tests that exercise real row locks, unique constraints, and concurrent invoice/payment/gateway writes. They are skipped unless `TEST_DATABASE_URL` points at a disposable database:
+The PostgreSQL integration suite exercises real row locks, unique constraints, analytics SQL, stale-job recovery, and concurrent invoice/payment/gateway writes. It is skipped unless `TEST_DATABASE_URL` points at a disposable database:
 
 ```bash
 TEST_DATABASE_URL=postgresql://user:password@localhost:55432/subscript_test \
-  npm run test -w @subscript/server -- tests/billing-postgres.test.ts tests/gateway-postgres.test.ts tests/automation-postgres.test.ts
+  npm run test -w @subscript/server -- tests/analytics-postgres.test.ts tests/automation-postgres.test.ts tests/billing-postgres.test.ts tests/gateway-postgres.test.ts
 ```
 
 Gateway API tests use a mocked Razorpay server and signed synthetic webhooks; no real payment is created. Add `TEST_REDIS_URL` to exercise the optional BullMQ integration test; without it, that test skips without failing:
@@ -508,12 +553,41 @@ TEST_REDIS_URL=redis://localhost:6379 \
 
 Use throwaway PostgreSQL and Redis instances for these commands. Never point them at data you need to keep. Apply the committed migrations against PostgreSQL before a production deployment with `npm run db:deploy`.
 
+The GitHub Actions workflow runs the same checks in three jobs: lint/typecheck/unit/build/audit, PostgreSQL + Redis integration, and Playwright. See [docs/testing.md](docs/testing.md) for expected counts, test design, and troubleshooting.
+
+## Production deployment
+
+- Web: deploy `apps/web/dist` to Vercel, Render Static Sites, or nginx. `vercel.json` and `render.yaml` include the SPA fallback and security headers.
+- API/worker: deploy `apps/server/Dockerfile`, or run the compiled `dist/server.js` and `dist/worker.js` under your process manager. The worker command is `node apps/server/dist/worker.js`.
+- PostgreSQL and Redis: use managed services with backups. Set `DATABASE_URL`, `REDIS_URL`, `CORS_ORIGINS`, `COOKIE_SECURE=true`, and a strong `METRICS_TOKEN`.
+- Apply migrations once per release with `npm run db:deploy`, then deploy the matching API and worker.
+- Route traffic with `/api/ready`; restart on `/api/health` failure.
+
+See [docs/deployment.md](docs/deployment.md), [docs/backup-recovery.md](docs/backup-recovery.md), and [docs/security.md](docs/security.md) before going live.
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Processes, request lifecycle, tenancy, billing, automation, trust boundaries |
+| [Configuration](docs/configuration.md) | Every environment variable, defaults, production examples |
+| [Local development](docs/local-development.md) | Setup, database/Redis, workers, Playwright, troubleshooting |
+| [Database](docs/database.md) | Schema, migrations, indexes, pooling, backup and restore basics |
+| [Workers and Redis](docs/workers.md) | Queues, retries, recovery, scaling, incidents |
+| [Razorpay](docs/razorpay.md) | Test Mode, checkout, webhooks, refunds, go-live |
+| [Testing](docs/testing.md) | Unit, integration, E2E, CI, expected results |
+| [Deployment](docs/deployment.md) | Vercel, Render, Docker, release order, rollback |
+| [Backup and recovery](docs/backup-recovery.md) | RPO/RTO, PITR, restore drills, incident checklist |
+| [Observability](docs/observability.md) | Logs, metrics, scraping, alerts, runbooks |
+| [Security](docs/security.md) | Audit results, controls, residual risks |
+
 ## Phase boundaries
 
-- Authentication, sessions, organization membership, roles, workspace settings, customers, plans, subscriptions, invoices, manual payments, Razorpay gateway payments, and background automation are implemented.
-- The dashboard's revenue figures remain illustrative preview data; the customer, plan, billing, and operations pages use live API records.
+- Authentication, sessions, organization membership, roles, workspace settings, customers, plans, subscriptions, invoices, manual payments, Razorpay gateway payments, background automation, and live revenue analytics are implemented.
+- Customer, plan, billing, operations, and analytics pages use live API records. No page relies on illustrative revenue data.
 - Automatic dunning sends reminders and applies an explicit past-due/cancel rule, but saved cards, automatic gateway charging, subscriptions billed directly by Razorpay, partial capture, and multi-currency conversion are not implemented.
 - Gateway verification is exercised with mocked Razorpay responses and synthetic signed webhooks. Live end-to-end confirmation requires your own Test Mode or live credentials and a public webhook URL; no real payment is made by the automated suite.
-- Automation tests that need Redis are optional and skipped unless `TEST_REDIS_URL` is set. PostgreSQL integration tests are skipped unless `TEST_DATABASE_URL` is set.
-- Member invitations and role changes are not available yet; the settings page presents the roster the API holds.
+- Automation tests that need Redis are optional and skipped unless `TEST_REDIS_URL` is set. PostgreSQL integration tests are skipped unless `TEST_DATABASE_URL` is set. Playwright flows run with memory stores and a local web preview.
+- Member invitations, role changes, MFA, SSO, and passkeys are not available yet; the settings page presents the roster the API holds.
+- Dockerfiles and deployment blueprints are provided. Build the images and run the post-deploy smoke checks in your target environment; Docker is not required for the normal test suite.
 - No secrets are committed; `.env` files are ignored.

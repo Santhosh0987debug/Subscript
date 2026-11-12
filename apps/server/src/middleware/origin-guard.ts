@@ -18,6 +18,12 @@ export function createOriginGuard(allowedOrigins: readonly string[]): RequestHan
     }
 
     const origin = req.get("origin");
+    const fetchSite = req.get("sec-fetch-site");
+
+    if (origin === "null" || fetchSite === "cross-site") {
+      next(new AppError(403, "FORBIDDEN", "Request origin is not allowed."));
+      return;
+    }
 
     if (origin && !allowed.has(origin)) {
       next(new AppError(403, "FORBIDDEN", "Request origin is not allowed."));

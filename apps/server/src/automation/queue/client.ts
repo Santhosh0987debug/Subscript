@@ -58,6 +58,7 @@ export interface AutomationQueueClient {
   ensureSweepSchedule(everyMs: number): Promise<void>;
   writeWorkerHeartbeat(workerId: string, seenAt: Date): Promise<void>;
   readHealth(): Promise<AutomationHealth>;
+  ping(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -405,6 +406,17 @@ export function createAutomationQueueClient(
         queues: [billingHealth.health, notificationHealth.health],
         generatedAt: now.toISOString(),
       };
+    },
+
+    async ping() {
+      const response = await withTimeout(
+        heartbeatConnection.ping(),
+        HEALTH_TIMEOUT_MS,
+      );
+
+      if (response !== "PONG") {
+        throw new Error("Redis did not acknowledge the ping.");
+      }
     },
 
     async close() {

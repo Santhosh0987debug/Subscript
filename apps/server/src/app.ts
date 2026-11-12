@@ -28,11 +28,13 @@ import { requireOrganization } from "./middleware/organization.js";
 import {
   createAuthRateLimiter,
   createRequestRateLimiter,
+  DEFAULT_API_RATE_LIMIT,
   DEFAULT_AUTH_RATE_LIMIT,
   DEFAULT_GATEWAY_RATE_LIMIT,
   DEFAULT_WEBHOOK_RATE_LIMIT,
   type RateLimitOptions,
 } from "./middleware/rate-limit.js";
+import { createRequestLogger } from "./middleware/request-logger.js";
 import { requireRole } from "./middleware/require-role.js";
 import { requestId } from "./middleware/request-id.js";
 import { createPlansRouter } from "./plans/router.js";
@@ -41,7 +43,12 @@ import type { SubscriptionStore } from "./subscriptions/types.js";
 import { createSubscriptionsRouter } from "./subscriptions/router.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createOrganizationsRouter } from "./routes/organizations.js";
-import { healthHandler } from "./routes/health.js";
+import {
+  createMetricsHandler,
+  createReadinessHandler,
+  healthHandler,
+  type ReadinessOptions,
+} from "./routes/health.js";
 
 const DEFAULT_CORS_ORIGINS = [
   "http://localhost:5173",
@@ -70,9 +77,14 @@ export interface AppOptions {
   cookieSecure?: boolean;
   sessionTtlMs?: number;
   authRateLimit?: RateLimitOptions | false;
+  apiRateLimit?: RateLimitOptions | false;
   gatewayRateLimit?: RateLimitOptions | false;
   webhookRateLimit?: RateLimitOptions | false;
   trustProxy?: boolean;
+  isProduction?: boolean;
+  logRequests?: boolean;
+  metricsToken?: string | null;
+  readiness?: ReadinessOptions;
 }
 
 export function createApp(options: AppOptions): Express {
@@ -96,6 +108,13 @@ export function createApp(options: AppOptions): Express {
   const registerRateLimiter = rateLimitOptions
     ? createAuthRateLimiter(rateLimitOptions)
     : allowAll;
+  const apiRateLimiter =
+    options.apiRateLimit === false
+      ? allowAll
+      : createRequestRateLimiter(
+          options.apiRateLimit ?? DEFAULT_API_RATE_LIMIT,
+          "Too many requests. Wait a moment and try again.",
+        );
   const gatewayRateLimiter =
     options.gatewayRateLimit === false
       ? allowAll
@@ -132,19 +151,48 @@ export function createApp(options: AppOptions): Express {
   };
 
   app.disable("x-powered-by");
+  app.disable("etag");
   app.set("trust proxy", options.trustProxy ?? false);
+  // Escape HTML-sensitive characters in JSON responses so a reflected value
+  // cannot become markup if a browser ever sniffs or renders the payload.
+  app.set("json escape", true);
+
   app.use(requestId);
-  app.use(helmet());
+  app.use(
+    createRequestLogger({
+      enabled: options.logRequests ?? true,
+    }),
+  );
+  app.use(
+    helmet({
+      // The API only returns JSON. The web application ships its own CSP.
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      referrerPolicy: { policy: "no-referrer" },
+      strictTransportSecurity: options.isProduction
+        ? { maxAge: 31_536_000, includeSubDomains: true }
+        : false,
+    }),
+  );
   app.use(
     cors({
       origin: allowedOrigins,
       credentials: true,
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
+      exposedHeaders: ["X-Request-Id", "X-Correlation-Id", "Retry-After"],
       maxAge: 600,
     }),
   );
   app.use(createOriginGuard(allowedOrigins));
+  app.use("/api", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
+
+  // Razorpay signatures cover raw bytes, so this router mounts before the JSON
+  // body parser and never receives a parsed object.
   app.use(
     createRazorpayWebhookRouter({
       gatewayService,
@@ -154,7 +202,17 @@ export function createApp(options: AppOptions): Express {
   app.use(express.json({ limit: "64kb", strict: true }));
   app.use(cookieParser());
 
+  // Liveness and readiness must stay reachable when the API is shedding load,
+  // so they are registered before the general API limiter.
   app.get(API_PATHS.health, healthHandler);
+  app.get(API_PATHS.ready, createReadinessHandler(options.readiness));
+  app.get(
+    API_PATHS.metrics,
+    createMetricsHandler(options.metricsToken ?? null),
+  );
+
+  app.use("/api", apiRateLimiter);
+
   app.use(
     createGatewayRouter({
       gatewayService,

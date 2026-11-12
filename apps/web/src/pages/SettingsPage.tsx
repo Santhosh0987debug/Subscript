@@ -515,7 +515,7 @@ export default function SettingsPage() {
 
               <div className="border-t border-line bg-surface-raised/60 px-5 py-3.5 sm:px-6">
                 <p className="text-[10.5px] leading-5 text-muted">
-                  Invitations and role changes are not part of Phase 2. This roster
+                  Invitations and role changes are not available yet. This roster
                   reflects the memberships held by the API today.
                 </p>
               </div>

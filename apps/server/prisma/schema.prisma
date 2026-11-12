@@ -554,6 +554,8 @@ model AutomationJob {
 
   @@index([organizationId, status, runAt])
   @@index([status, runAt])
+  @@index([status, lockedAt])
+  @@index([status, updatedAt])
   @@index([queue, status])
   @@index([organizationId, type, targetId, createdAt])
   @@map("automation_jobs")
@@ -587,6 +589,7 @@ model Notification {
 
   @@index([organizationId, status, createdAt])
   @@index([status, nextAttemptAt])
+  @@index([status, updatedAt])
   @@index([organizationId, type, createdAt])
   @@map("notifications")
 }

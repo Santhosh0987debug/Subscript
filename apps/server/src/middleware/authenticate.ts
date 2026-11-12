@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from "express";
 import type { AuthService } from "../auth/service.js";
-import { SESSION_COOKIE_NAME } from "../auth/session-token.js";
+import { SESSION_COOKIE_NAME, MAX_SESSION_TOKEN_LENGTH } from "../auth/session-token.js";
 import { AppError } from "../errors/app-error.js";
 
 export interface AuthenticationOptions {
@@ -12,7 +12,16 @@ export function readSessionToken(req: Request, cookieName = SESSION_COOKIE_NAME)
   const cookies = req.cookies as Record<string, unknown> | undefined;
   const token = cookies?.[cookieName];
 
-  return typeof token === "string" && token.length > 0 ? token : undefined;
+  if (
+    typeof token !== "string" ||
+    token.length === 0 ||
+    token.length > MAX_SESSION_TOKEN_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(token)
+  ) {
+    return undefined;
+  }
+
+  return token;
 }
 
 export function createAuthenticate(options: AuthenticationOptions): RequestHandler {

@@ -106,7 +106,7 @@ export function AuthLayout({
 
           <div className="relative mt-10 flex items-center justify-between border-t border-sidebar-line pt-5 font-mono text-[8.5px] uppercase tracking-[0.2em] text-sidebar-muted/80">
             <span>Subscript · Revenue OS</span>
-            <span>Phase 2</span>
+            <span>Live workspace</span>
           </div>
         </aside>
 

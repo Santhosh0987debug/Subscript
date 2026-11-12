@@ -49,7 +49,12 @@ function startServer(): void {
     return;
   }
 
-  const prisma = env.databaseUrl ? createPrismaClient(env.databaseUrl) : null;
+  const prisma = env.databaseUrl
+    ? createPrismaClient(env.databaseUrl, {
+        ...env.database,
+        applicationName: "subscript-api",
+      })
+    : null;
 
   if (!prisma && env.nodeEnv === "production") {
     logger.error("DATABASE_URL is required in production.");
@@ -181,11 +186,27 @@ function startServer(): void {
       renewalWindowDays: env.automation.renewalReminderWindowDays,
     },
     corsOrigins: env.corsOrigins,
+    cookieName: env.cookieName,
     cookieSecure: env.cookieSecure,
     sessionTtlMs: env.sessionTtlMs,
     trustProxy: env.trustProxy,
+    isProduction: env.nodeEnv === "production",
+    apiRateLimit: env.apiRateLimit,
+    logRequests: env.logRequests,
+    metricsToken: env.metricsToken,
+    readiness: {
+      database: prisma
+        ? async () => {
+            await prisma.$queryRaw`SELECT 1`;
+          }
+        : undefined,
+      redis: queueClient ? () => queueClient.ping() : undefined,
+    },
   });
   const server = createServer(app);
+  server.requestTimeout = env.http.requestTimeoutMs;
+  server.headersTimeout = env.http.headersTimeoutMs;
+  server.keepAliveTimeout = env.http.keepAliveTimeoutMs;
   let shuttingDown = false;
 
   const shutdown = (signal: string): void => {
@@ -199,9 +220,10 @@ function startServer(): void {
     const forceExitTimer = setTimeout(() => {
       logger.error("Graceful shutdown timed out; exiting.");
       process.exit(1);
-    }, 10_000);
+    }, env.http.shutdownTimeoutMs);
     forceExitTimer.unref();
 
+    server.closeIdleConnections();
     server.close((serverError) => {
       clearTimeout(forceExitTimer);
 
@@ -265,6 +287,12 @@ function startServer(): void {
         ? { enabled: true, testMode: gateway.testMode }
         : { enabled: false },
       corsOrigins: env.corsOrigins,
+      http: {
+        requestTimeoutMs: env.http.requestTimeoutMs,
+        headersTimeoutMs: env.http.headersTimeoutMs,
+        keepAliveTimeoutMs: env.http.keepAliveTimeoutMs,
+      },
+      metricsEnabled: env.metricsToken !== null,
     });
   });
 

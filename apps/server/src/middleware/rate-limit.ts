@@ -7,6 +7,11 @@ export interface RateLimitOptions {
   limit: number;
 }
 
+export const DEFAULT_API_RATE_LIMIT: RateLimitOptions = {
+  windowMs: 60 * 1000,
+  limit: 600,
+};
+
 export const DEFAULT_AUTH_RATE_LIMIT: RateLimitOptions = {
   windowMs: 15 * 60 * 1000,
   limit: 20,

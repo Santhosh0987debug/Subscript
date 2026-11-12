@@ -59,7 +59,7 @@ export function PlaceholderPage({
         <div className="relative flex flex-col items-center px-6 py-14 text-center sm:px-10 sm:py-16">
           <Badge tone="lime">
             <span aria-hidden="true" className="h-1 w-1 rounded-full bg-ink/50" />
-            Phase 2 preview
+            Live workspace
           </Badge>
 
           <span className="mt-7 grid h-16 w-16 rotate-[-3deg] place-items-center rounded-2xl bg-lime text-ink shadow-[0_18px_34px_-22px_rgba(23,23,18,0.5)]">

@@ -1,6 +1,5 @@
 import type { CookieOptions, Response } from "express";
 import { SESSION_COOKIE_NAME } from "./session-token.js";
-
 export interface SessionCookieOptions {
   secure: boolean;
   ttlMs: number;
@@ -13,6 +12,7 @@ function baseCookieOptions(secure: boolean): CookieOptions {
     secure,
     sameSite: "lax",
     path: "/",
+    priority: "high",
   };
 }
 

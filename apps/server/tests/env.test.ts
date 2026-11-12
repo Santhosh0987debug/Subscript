@@ -18,7 +18,23 @@ describe("parseEnv", () => {
     expect(env.sessionTtlMs).toBe(7 * 24 * 60 * 60 * 1000);
     expect(env.bcryptCost).toBe(12);
     expect(env.cookieSecure).toBe(false);
+    expect(env.cookieName).toBe("subscript_session");
     expect(env.trustProxy).toBe(false);
+    expect(env.database).toEqual({
+      poolMax: 10,
+      idleTimeoutMs: 30_000,
+      connectionTimeoutMs: 5_000,
+      statementTimeoutMs: 15_000,
+    });
+    expect(env.http).toEqual({
+      requestTimeoutMs: 60_000,
+      headersTimeoutMs: 65_000,
+      keepAliveTimeoutMs: 5_000,
+      shutdownTimeoutMs: 15_000,
+    });
+    expect(env.apiRateLimit).toEqual({ windowMs: 60_000, limit: 600 });
+    expect(env.metricsToken).toBeNull();
+    expect(env.logRequests).toBe(true);
   });
 
   it("accepts auth and cookie overrides", () => {
@@ -101,6 +117,76 @@ describe("parseEnv", () => {
     expect(env.databaseUrl).toBe(productionDatabaseUrl);
     expect(env.corsOrigins).toEqual(["https://app.subscript.dev"]);
     expect(env.cookieSecure).toBe(true);
+    expect(env.cookieName).toBe("__Host-subscript_session");
+  });
+
+  it("rejects insecure production cookie and origin settings", () => {
+    expect(() =>
+      parseEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: productionDatabaseUrl,
+        CORS_ORIGINS: "https://app.subscript.dev",
+        COOKIE_SECURE: "false",
+      }),
+    ).toThrow(EnvValidationError);
+
+    expect(() =>
+      parseEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: productionDatabaseUrl,
+        CORS_ORIGINS: "http://app.subscript.dev",
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("rejects __Host- cookies without secure transport", () => {
+    expect(() =>
+      parseEnv({
+        SESSION_COOKIE_NAME: "__Host-subscript_session",
+        COOKIE_SECURE: "false",
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("accepts explicit production pool, timeout, metrics, and cookie settings", () => {
+    const env = parseEnv({
+      NODE_ENV: "production",
+      DATABASE_URL: productionDatabaseUrl,
+      CORS_ORIGINS: "https://app.subscript.dev",
+      DB_POOL_MAX: "20",
+      DB_STATEMENT_TIMEOUT_MS: "20000",
+      HTTP_REQUEST_TIMEOUT_MS: "30000",
+      HTTP_HEADERS_TIMEOUT_MS: "35000",
+      HTTP_KEEP_ALIVE_TIMEOUT_MS: "4000",
+      SHUTDOWN_TIMEOUT_MS: "12000",
+      METRICS_TOKEN: "metrics-token-value-123456",
+      LOG_REQUESTS: "false",
+      API_RATE_LIMIT_WINDOW_SECONDS: "120",
+      API_RATE_LIMIT_MAX: "900",
+    });
+
+    expect(env.database.poolMax).toBe(20);
+    expect(env.database.statementTimeoutMs).toBe(20_000);
+    expect(env.http.requestTimeoutMs).toBe(30_000);
+    expect(env.http.shutdownTimeoutMs).toBe(12_000);
+    expect(env.metricsToken).toBe("metrics-token-value-123456");
+    expect(env.logRequests).toBe(false);
+    expect(env.apiRateLimit).toEqual({ windowMs: 120_000, limit: 900 });
+  });
+
+  it("rejects invalid HTTP timeout ordering", () => {
+    expect(() =>
+      parseEnv({
+        HTTP_HEADERS_TIMEOUT_MS: "5000",
+        HTTP_KEEP_ALIVE_TIMEOUT_MS: "5000",
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it("rejects invalid cookie names", () => {
+    expect(() =>
+      parseEnv({ SESSION_COOKIE_NAME: "bad cookie name" }),
+    ).toThrow(EnvValidationError);
   });
 
   it("leaves Razorpay disabled when no credentials are present", () => {

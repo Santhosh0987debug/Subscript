@@ -53,7 +53,10 @@ function startWorker(): void {
   }
 
   const workerId = `${hostname()}:${process.pid}`;
-  const prisma = createPrismaClient(env.databaseUrl);
+  const prisma = createPrismaClient(env.databaseUrl, {
+    ...env.database,
+    applicationName: "subscript-worker",
+  });
   const automationStore = createPrismaAutomationStore(prisma);
   const candidateSource = createPrismaAutomationCandidateSource(prisma);
   const subscriptionStore = createPrismaSubscriptionStore(prisma);
@@ -161,7 +164,7 @@ function startWorker(): void {
     const forceExitTimer = setTimeout(() => {
       logger.error("Automation worker shutdown timed out; exiting.");
       process.exit(1);
-    }, 20_000);
+    }, env.http.shutdownTimeoutMs);
     forceExitTimer.unref();
 
     if (heartbeatTimer) {
